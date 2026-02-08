@@ -19,15 +19,7 @@ steps:
   - name: deploy
     image: curlimages/curl
     commands:
-      - |
-        curl -sSk -X PATCH \
-          -H "Authorization: Bearer $$KUBE_TOKEN" \
-          -H "Content-Type: application/strategic-merge-patch+json" \
-          --data '{"spec":{"template":{"metadata":{"annotations":{"drone-build":"${DRONE_BUILD_NUMBER}"}}}}}' \
-          "https://10.0.20.100:6443/apis/apps/v1/namespaces/health/deployments/health"
-    environment:
-      KUBE_TOKEN:
-        from_secret: kube_token
+      - 'curl -s -X PATCH "https://kubernetes:6443/apis/apps/v1/namespaces/health/deployments/health" -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" -k -d ''[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"viktorbarzin/health:''"$DRONE_BUILD_NUMBER"''"}]'' | head'
 
 trigger:
   branch:
