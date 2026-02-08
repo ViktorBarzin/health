@@ -2,11 +2,20 @@
   import { api } from '$lib/api';
   import type { WorkoutSummary } from '$lib/types';
 
+  interface Props {
+    start?: string;
+    end?: string;
+  }
+
+  let { start, end }: Props = $props();
+
   let workouts = $state<WorkoutSummary[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
 
   $effect(() => {
+    const _s = start;
+    const _e = end;
     loadWorkouts();
   });
 
@@ -14,7 +23,10 @@
     loading = true;
     error = null;
     try {
-      workouts = await api.get<WorkoutSummary[]>('/api/workouts?limit=5');
+      let url = '/api/workouts?limit=5';
+      if (start) url += `&start=${start}`;
+      if (end) url += `&end=${end}`;
+      workouts = await api.get<WorkoutSummary[]>(url);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load workouts';
     } finally {

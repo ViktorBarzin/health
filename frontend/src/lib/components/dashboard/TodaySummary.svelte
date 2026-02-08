@@ -1,27 +1,13 @@
 <script lang="ts">
-  import { api } from '$lib/api';
   import type { DashboardSummary } from '$lib/types';
   import MetricCard from './MetricCard.svelte';
 
-  let summary = $state<DashboardSummary | null>(null);
-  let loading = $state(true);
-  let error = $state<string | null>(null);
-
-  $effect(() => {
-    loadSummary();
-  });
-
-  async function loadSummary() {
-    loading = true;
-    error = null;
-    try {
-      summary = await api.get<DashboardSummary>('/api/dashboard/summary');
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load summary';
-    } finally {
-      loading = false;
-    }
+  interface Props {
+    summary: DashboardSummary | null;
+    loading: boolean;
   }
+
+  let { summary, loading }: Props = $props();
 </script>
 
 {#if loading}
@@ -46,16 +32,6 @@
       </div>
     {/each}
   </div>
-{:else if error}
-  <div class="rounded-xl bg-surface-800 p-6 border border-red-500/30 text-center">
-    <p class="text-red-400 text-sm">{error}</p>
-    <button
-      onclick={loadSummary}
-      class="mt-2 text-xs text-primary-400 hover:text-primary-300 underline"
-    >
-      Retry
-    </button>
-  </div>
 {:else if summary}
   <!-- Activity metrics -->
   <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -68,7 +44,7 @@
     />
     <MetricCard
       title="Active Energy"
-      value={Math.round(summary.active_energy_today)}
+      value={summary.active_energy_today != null ? Math.round(summary.active_energy_today) : null}
       unit="kcal"
       icon="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"
       color="#f59e0b"

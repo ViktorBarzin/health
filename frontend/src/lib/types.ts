@@ -32,7 +32,7 @@ export interface MetricResponse {
 }
 
 export interface WorkoutSummary {
-  id: number;
+  id: string;
   activity_type: string;
   time: string;
   end_time: string;
@@ -54,14 +54,14 @@ export interface WorkoutDetail extends WorkoutSummary {
 }
 
 export interface DashboardSummary {
-  steps_today: number;
-  active_energy_today: number;
-  exercise_minutes_today: number;
-  stand_hours_today: number;
-  resting_hr: number;
-  hrv: number;
-  spo2: number;
-  sleep_hours_last_night: number;
+  steps_today: number | null;
+  active_energy_today: number | null;
+  exercise_minutes_today: number | null;
+  stand_hours_today: number | null;
+  resting_hr: number | null;
+  hrv: number | null;
+  spo2: number | null;
+  sleep_hours_last_night: number | null;
 }
 
 export interface ImportStatus {

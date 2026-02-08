@@ -3,6 +3,7 @@
   import type { WorkoutSummary } from '$lib/types';
   import { WORKOUT_LABELS } from '$lib/utils/constants';
   import { formatDate, formatDuration, formatDistance, formatNumber } from '$lib/utils/format';
+  import { dateRange } from '$lib/stores/date-range.svelte';
 
   let workouts = $state<WorkoutSummary[]>([]);
   let loading = $state(true);
@@ -33,6 +34,8 @@
 
   $effect(() => {
     const _t = selectedType;
+    const _s = dateRange.startISO;
+    const _e = dateRange.endISO;
     offset = 0;
     workouts = [];
     hasMore = true;
@@ -48,7 +51,7 @@
     error = '';
 
     try {
-      let url = `/api/workouts?limit=${limit}&offset=${reset ? 0 : offset}`;
+      let url = `/api/workouts?limit=${limit}&offset=${reset ? 0 : offset}&start=${dateRange.startISO}&end=${dateRange.endISO}`;
       if (selectedType) {
         url += `&activity_type=${selectedType}`;
       }

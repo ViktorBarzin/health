@@ -17,25 +17,27 @@
   let loading = $state(true);
 
   $effect(() => {
+    const _s = dateRange.startISO;
+    const _e = dateRange.endISO;
+    const _r = dateRange.resolution;
     loadDashboard();
   });
 
   async function loadDashboard() {
     loading = true;
 
-    const today = new Date().toISOString().slice(0, 10);
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const weekStart = sevenDaysAgo.toISOString().slice(0, 10);
+    const start = dateRange.startISO;
+    const end = dateRange.endISO;
+    const resolution = dateRange.resolution;
 
     try {
       const [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes] = await Promise.allSettled([
-        api.get<DashboardSummary>('/api/dashboard/summary'),
-        api.get<ActivityRingData[]>(`/api/activity/rings?start=${today}&end=${today}`),
-        api.get<MetricResponse>(`/api/metrics/steps?start=${weekStart}&end=${today}&resolution=day`),
-        api.get<MetricResponse>(`/api/metrics/active_energy?start=${weekStart}&end=${today}&resolution=day`),
-        api.get<MetricResponse>(`/api/metrics/heart_rate?start=${weekStart}&end=${today}&resolution=day`),
-        api.get<MetricResponse>(`/api/metrics/exercise_minutes?start=${weekStart}&end=${today}&resolution=day`),
+        api.get<DashboardSummary>(`/api/dashboard/summary?start=${start}&end=${end}`),
+        api.get<ActivityRingData[]>(`/api/activity/rings?start=${start}&end=${end}`),
+        api.get<MetricResponse>(`/api/metrics/steps?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/active_energy?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/heart_rate?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/exercise_minutes?start=${start}&end=${end}&resolution=${resolution}`),
       ]);
 
       if (summaryRes.status === 'fulfilled') summary = summaryRes.value;
@@ -75,8 +77,8 @@
       {/if}
     </div>
 
-    <!-- Today summary (fetches its own data) -->
-    <TodaySummary />
+    <!-- Today summary -->
+    <TodaySummary {summary} {loading} />
   </div>
 
   <!-- Metric cards with sparklines -->
@@ -104,7 +106,7 @@
       />
       <MetricCard
         title="Active Energy"
-        value={summary ? Math.round(summary.active_energy_today) : null}
+        value={summary?.active_energy_today != null ? Math.round(summary.active_energy_today) : null}
         unit="kcal"
         trend={energyData?.stats.trend_pct ?? null}
         sparklineData={energySparkline}
@@ -134,7 +136,7 @@
 
   <!-- Bottom row: Recent Workouts + Sleep Summary -->
   <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-    <RecentWorkouts />
-    <SleepSummary />
+    <RecentWorkouts start={dateRange.startISO} end={dateRange.endISO} />
+    <SleepSummary {summary} {loading} />
   </div>
 </div>

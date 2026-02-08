@@ -1,32 +1,18 @@
 <script lang="ts">
-  import { api } from '$lib/api';
   import type { DashboardSummary } from '$lib/types';
 
-  let summary = $state<DashboardSummary | null>(null);
-  let loading = $state(true);
-  let error = $state<string | null>(null);
-
-  $effect(() => {
-    loadSleep();
-  });
-
-  async function loadSleep() {
-    loading = true;
-    error = null;
-    try {
-      summary = await api.get<DashboardSummary>('/api/dashboard/summary');
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load sleep data';
-    } finally {
-      loading = false;
-    }
+  interface Props {
+    summary: DashboardSummary | null;
+    loading: boolean;
   }
 
-  let hours = $derived(summary ? Math.floor(summary.sleep_hours_last_night) : 0);
-  let minutes = $derived(summary ? Math.round((summary.sleep_hours_last_night % 1) * 60) : 0);
+  let { summary, loading }: Props = $props();
+
+  let hours = $derived(summary?.sleep_hours_last_night != null ? Math.floor(summary.sleep_hours_last_night) : 0);
+  let minutes = $derived(summary?.sleep_hours_last_night != null ? Math.round((summary.sleep_hours_last_night % 1) * 60) : 0);
 
   let qualityLabel = $derived.by(() => {
-    if (!summary) return '';
+    if (!summary || summary.sleep_hours_last_night == null) return '';
     const h = summary.sleep_hours_last_night;
     if (h >= 8) return 'Excellent';
     if (h >= 7) return 'Good';
@@ -35,7 +21,7 @@
   });
 
   let qualityColor = $derived.by(() => {
-    if (!summary) return 'text-surface-400';
+    if (!summary || summary.sleep_hours_last_night == null) return 'text-surface-400';
     const h = summary.sleep_hours_last_night;
     if (h >= 8) return 'text-green-400';
     if (h >= 7) return 'text-blue-400';
@@ -44,7 +30,7 @@
   });
 
   let barPercent = $derived(
-    summary ? Math.min((summary.sleep_hours_last_night / 9) * 100, 100) : 0
+    summary?.sleep_hours_last_night != null ? Math.min((summary.sleep_hours_last_night / 9) * 100, 100) : 0
   );
 </script>
 
@@ -64,16 +50,6 @@
       <div class="h-10 w-28 bg-surface-700 rounded"></div>
       <div class="h-3 w-full bg-surface-700 rounded"></div>
       <div class="h-4 w-16 bg-surface-700 rounded"></div>
-    </div>
-  {:else if error}
-    <div class="text-center py-4">
-      <p class="text-red-400 text-sm">{error}</p>
-      <button
-        onclick={loadSleep}
-        class="mt-2 text-xs text-primary-400 hover:text-primary-300 underline"
-      >
-        Retry
-      </button>
     </div>
   {:else if summary}
     <!-- Hours slept -->

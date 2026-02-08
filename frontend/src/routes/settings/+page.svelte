@@ -30,10 +30,6 @@
 
   function handleUploadComplete(batchId: string) {
     activeBatchId = batchId;
-    // Refresh the imports list after a delay
-    setTimeout(() => {
-      loadImports();
-    }, 5000);
   }
 
   async function handleLogout() {
@@ -59,7 +55,7 @@
       {#if activeBatchId}
         <div>
           <h4 class="text-sm font-medium text-surface-300 mb-3">Current Import</h4>
-          <ImportStatusComponent batchId={activeBatchId} />
+          <ImportStatusComponent batchId={activeBatchId} onRefresh={loadImports} />
         </div>
       {/if}
 
@@ -79,7 +75,7 @@
           {/each}
         </div>
       {:else if imports.length > 0}
-        <ImportStatusComponent imports={imports} />
+        <ImportStatusComponent imports={imports} onDelete={loadImports} />
       {:else}
         <div class="text-center py-4">
           <p class="text-sm text-surface-500">No previous imports found.</p>
