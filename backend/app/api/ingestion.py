@@ -1,6 +1,7 @@
 """Data ingestion (upload) API routes."""
 
 import asyncio
+import logging
 import uuid
 import zipfile
 from pathlib import Path
@@ -26,13 +27,35 @@ from app.models.workout import Workout
 from app.models.workout_route_point import WorkoutRoutePoint
 from app.models.health_record import HealthRecord
 from app.models.category_record import CategoryRecord
+from app.models.activity_summary import ActivitySummary
 from app.schemas.dashboard import ImportStatusResponse
 from app.services.xml_parser import parse_health_export
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".xml", ".zip"}
 MAX_UPLOAD_SIZE = 4 * 1024 * 1024 * 1024  # 4 GB
+
+
+def _validate_xml_complete(xml_path: Path) -> None:
+    """Check that the XML file ends with a proper closing tag.
+
+    Apple Health exports can be truncated if the phone runs out of space
+    or the export is interrupted.  A truncated file will be missing the
+    ``</HealthData>`` closing tag.
+    """
+    tail_bytes = min(1024, xml_path.stat().st_size)
+    with open(xml_path, "rb") as f:
+        f.seek(-tail_bytes, 2)
+        tail = f.read().decode("utf-8", errors="replace")
+    if "</HealthData>" not in tail:
+        raise ValueError(
+            "The export.xml file appears truncated (missing </HealthData> "
+            "closing tag). Please re-export from the Apple Health app and "
+            "ensure the export completes fully before uploading."
+        )
 
 
 def _extract_xml_from_zip(zip_path: Path) -> Path:
@@ -55,12 +78,19 @@ def _extract_xml_from_zip(zip_path: Path) -> Path:
         if not xml_candidates:
             raise ValueError("No XML file found in ZIP archive")
         zf.extractall(extract_dir)
-    return extract_dir / xml_candidates[0]
+
+    xml_path = extract_dir / xml_candidates[0]
+    _validate_xml_complete(xml_path)
+    return xml_path
 
 
 def _run_parser_sync(file_path: str, user_id: int, batch_id: str, database_url: str) -> None:
     """Run the async XML parser in a fresh event loop with its own engine."""
+    import logging as _logging
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    # Ensure app loggers are visible (background thread may not inherit config)
+    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
     engine = create_async_engine(
         database_url, echo=False,
@@ -125,7 +155,15 @@ async def upload_health_data(
         try:
             xml_path = await asyncio.to_thread(_extract_xml_from_zip, file_path)
         except (zipfile.BadZipFile, ValueError) as e:
-            file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+    else:
+        # Validate standalone XML upload
+        try:
+            await asyncio.to_thread(_validate_xml_complete, file_path)
+        except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e),
@@ -275,7 +313,104 @@ async def delete_import_batch(
     await db.execute(delete(HealthRecord).where(HealthRecord.batch_id == batch_id))
     # 4. Category records
     await db.execute(delete(CategoryRecord).where(CategoryRecord.batch_id == batch_id))
-    # 5. The batch itself
+    # 5. Activity summaries (no batch_id FK — delete by user + date range overlap)
+    # Activity summaries don't have batch_id, so we skip them in batch delete.
+    # They'll be deduped on re-import via ON CONFLICT DO NOTHING.
+    # 6. The batch itself
     await db.execute(delete(ImportBatch).where(ImportBatch.id == batch_id))
 
     await db.commit()
+
+
+@router.post("/upload/{batch_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
+async def reprocess_import_batch(
+    batch_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Re-process an import from its stored ZIP/XML file.
+
+    Deletes all records from the batch and re-runs the parser against the
+    original file, which is still stored on disk.
+    """
+    stmt = select(ImportBatch).where(
+        ImportBatch.id == batch_id,
+        ImportBatch.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    batch = result.scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Import batch not found",
+        )
+
+    if batch.status in ("processing", "cancelling"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot reprocess a batch that is currently processing",
+        )
+
+    upload_dir = Path(settings.UPLOAD_DIR)
+
+    # Find the stored XML file
+    extract_dir = upload_dir / str(batch_id)
+    xml_candidates = list(extract_dir.rglob("export.xml")) + list(
+        extract_dir.rglob("Export.xml")
+    )
+
+    # Also check for ZIP file that could be re-extracted
+    zip_path = upload_dir / f"{batch_id}.zip"
+    if not xml_candidates and zip_path.exists():
+        try:
+            xml_path = await asyncio.to_thread(_extract_xml_from_zip, zip_path)
+            xml_candidates = [xml_path]
+        except (zipfile.BadZipFile, ValueError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Stored ZIP is invalid: {e}",
+            )
+
+    if not xml_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No stored export file found for this batch. "
+                   "The original file may have been cleaned up.",
+        )
+
+    xml_path = xml_candidates[0]
+
+    # Validate the XML is complete
+    try:
+        await asyncio.to_thread(_validate_xml_complete, xml_path)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    # Delete existing records for this batch
+    workout_ids_stmt = select(Workout.id).where(Workout.batch_id == batch_id)
+    await db.execute(
+        delete(WorkoutRoutePoint).where(
+            WorkoutRoutePoint.workout_id.in_(workout_ids_stmt)
+        )
+    )
+    await db.execute(delete(Workout).where(Workout.batch_id == batch_id))
+    await db.execute(delete(HealthRecord).where(HealthRecord.batch_id == batch_id))
+    await db.execute(delete(CategoryRecord).where(CategoryRecord.batch_id == batch_id))
+
+    # Reset batch status
+    await db.execute(
+        update(ImportBatch)
+        .where(ImportBatch.id == batch_id)
+        .values(status="processing", record_count=0)
+    )
+    await db.commit()
+
+    background_tasks.add_task(
+        _run_parser_sync, str(xml_path), user.id, str(batch_id), settings.DATABASE_URL
+    )
+
+    return {"batch_id": str(batch_id), "status": "reprocessing"}

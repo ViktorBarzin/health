@@ -606,6 +606,15 @@ async def _consumer(
         try:
             await _flush_batch(db_session_factory, batch)
             progress[0] += len(batch)
+        except Exception:
+            logger.exception(
+                "Consumer %d: batch failed (%d health, %d category, "
+                "%d workouts, %d route pts, %d activity)",
+                consumer_id,
+                len(batch.health), len(batch.category),
+                len(batch.workouts), len(batch.route_points),
+                len(batch.activity),
+            )
         finally:
             queue.task_done()
 
@@ -614,36 +623,36 @@ async def _flush_batch(
     db_session_factory: async_sessionmaker,
     batch: BatchPayload,
 ) -> None:
-    """Persist one batch using concurrent table inserts.
-
-    Independent tables (health, category, activity) are written in parallel.
-    Workouts are inserted separately so that a workout failure doesn't cancel
-    the independent inserts via ``asyncio.gather``.
+    """Persist one batch, isolating each table insert so individual failures
+    don't prevent other record types from being saved.
     """
-    coros: list = []
+    for label, insert_fn, rows in [
+        ("health_records", bulk_insert_health_records, batch.health),
+        ("category_records", bulk_insert_category_records, batch.category),
+        ("activity_summaries", bulk_insert_activity_summaries, batch.activity),
+    ]:
+        if rows:
+            try:
+                await _insert_table(db_session_factory, insert_fn, rows)
+            except Exception:
+                logger.exception("Failed to insert %d %s", len(rows), label)
 
-    if batch.health:
-        coros.append(_insert_table(db_session_factory, bulk_insert_health_records, batch.health))
-    if batch.category:
-        coros.append(_insert_table(db_session_factory, bulk_insert_category_records, batch.category))
-    if batch.activity:
-        coros.append(_insert_table(db_session_factory, bulk_insert_activity_summaries, batch.activity))
-
-    if coros:
-        await asyncio.gather(*coros)
-
-    # Workouts separately so failures don't cancel independent inserts
+    # Workouts + route points (FK dependency) handled together
     if batch.workouts:
         try:
             await _insert_workouts_and_routes(db_session_factory, batch.workouts, batch.route_points)
         except Exception:
             logger.exception(
-                "Failed to insert %d workouts (%d route points) — "
-                "health/category/activity records from this batch were saved",
+                "Failed to insert %d workouts (%d route points)",
                 len(batch.workouts), len(batch.route_points),
             )
 
-    logger.debug("Flushed batch to database")
+    logger.debug(
+        "Flushed batch: %d health, %d category, %d workouts, %d route pts, %d activity",
+        len(batch.health), len(batch.category),
+        len(batch.workouts), len(batch.route_points),
+        len(batch.activity),
+    )
 
 
 async def _insert_table(db_session_factory: async_sessionmaker, insert_fn, rows: list[dict[str, Any]]) -> None:
