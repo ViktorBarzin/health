@@ -2,8 +2,8 @@
 
 from datetime import date, datetime, time, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -15,94 +15,109 @@ from app.schemas.dashboard import DashboardSummary
 
 router = APIRouter()
 
-
-async def _latest_metric(
-    db: AsyncSession,
-    user_id: int,
-    metric_type: str,
-    since: datetime | None = None,
-) -> float | None:
-    """Fetch the most recent value for a metric type, optionally since a datetime."""
-    filters = [
-        HealthRecord.user_id == user_id,
-        HealthRecord.metric_type == metric_type,
-    ]
-    if since is not None:
-        filters.append(HealthRecord.time >= since)
-
-    stmt = (
-        select(HealthRecord.value)
-        .where(*filters)
-        .order_by(HealthRecord.time.desc())
-        .limit(1)
-    )
-    result = await db.execute(stmt)
-    row = result.scalar_one_or_none()
-    return row
-
-
-async def _sum_metric_today(
-    db: AsyncSession,
-    user_id: int,
-    metric_type: str,
-    today_start: datetime,
-) -> float | None:
-    """Sum all values for a metric type since today_start."""
-    stmt = (
-        select(func.sum(HealthRecord.value))
-        .where(
-            HealthRecord.user_id == user_id,
-            HealthRecord.metric_type == metric_type,
-            HealthRecord.time >= today_start,
-        )
-    )
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+# Metric types that need SUM aggregation
+_SUM_METRICS = ["StepCount", "ActiveEnergyBurned"]
+# Metric types that need the latest (most recent) value
+_LATEST_METRICS = [
+    "RestingHeartRate",
+    "HeartRateVariabilitySDNN",
+    "OxygenSaturation",
+    "SleepAnalysis",
+]
 
 
 @router.get("/summary", response_model=DashboardSummary)
 async def get_dashboard_summary(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardSummary:
-    """Return a summary of today's key health metrics."""
-    today = date.today()
-    today_start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-    yesterday_start = datetime.combine(today, time.min, tzinfo=timezone.utc)
+    """Return a summary of key health metrics.
 
-    # Get today's activity summary if available
-    activity_stmt = select(ActivitySummary).where(
-        ActivitySummary.user_id == user.id,
-        ActivitySummary.date == today,
-    )
+    Without date parameters returns today's data.
+    With start/end returns aggregated data for the given range.
+    """
+    if start is None:
+        today = date.today()
+        range_start = datetime.combine(today, time.min, tzinfo=timezone.utc)
+    else:
+        range_start = start
+
+    range_end = end  # None means unbounded upper
+
+    # Get activity summary for the range
+    activity_filters = [ActivitySummary.user_id == user.id]
+    if start is not None:
+        activity_filters.append(ActivitySummary.date >= start.date())
+    else:
+        activity_filters.append(ActivitySummary.date == date.today())
+    if range_end is not None:
+        activity_filters.append(ActivitySummary.date <= range_end.date())
+
+    activity_stmt = select(
+        func.sum(ActivitySummary.exercise_minutes),
+        func.sum(ActivitySummary.stand_hours),
+    ).where(*activity_filters)
     activity_result = await db.execute(activity_stmt)
-    activity = activity_result.scalar_one_or_none()
+    activity_row = activity_result.one()
+    exercise_minutes = activity_row[0]
+    stand_hours = activity_row[1]
 
-    # Aggregate today's metrics from health records
-    steps = await _sum_metric_today(db, user.id, "StepCount", today_start)
-    active_energy = await _sum_metric_today(
-        db, user.id, "ActiveEnergyBurned", today_start
+    # -- Combined SUM query for StepCount + ActiveEnergyBurned (1 query) ----
+    time_filters: list = [
+        HealthRecord.user_id == user.id,
+        HealthRecord.metric_type.in_(_SUM_METRICS),
+        HealthRecord.time >= range_start,
+    ]
+    if range_end is not None:
+        time_filters.append(HealthRecord.time <= range_end)
+
+    sums_stmt = select(
+        func.sum(
+            case(
+                (HealthRecord.metric_type == "StepCount", HealthRecord.value),
+                else_=None,
+            )
+        ).label("steps"),
+        func.sum(
+            case(
+                (HealthRecord.metric_type == "ActiveEnergyBurned", HealthRecord.value),
+                else_=None,
+            )
+        ).label("energy"),
+    ).where(*time_filters)
+
+    sums_result = await db.execute(sums_stmt)
+    sums_row = sums_result.one()
+    steps = sums_row.steps
+    active_energy = sums_row.energy
+
+    # -- Combined DISTINCT ON query for latest values (1 query) -------------
+    latest_filters: list = [
+        HealthRecord.user_id == user.id,
+        HealthRecord.metric_type.in_(_LATEST_METRICS),
+        HealthRecord.time >= range_start,
+    ]
+    if range_end is not None:
+        latest_filters.append(HealthRecord.time <= range_end)
+
+    latest_stmt = (
+        select(HealthRecord.metric_type, HealthRecord.value)
+        .distinct(HealthRecord.metric_type)
+        .where(*latest_filters)
+        .order_by(HealthRecord.metric_type, HealthRecord.time.desc())
     )
-
-    # Latest single-value metrics (no time constraint for resting HR, HRV, SpO2)
-    resting_hr = await _latest_metric(db, user.id, "RestingHeartRate")
-    hrv = await _latest_metric(db, user.id, "HeartRateVariabilitySDNN")
-    spo2 = await _latest_metric(db, user.id, "OxygenSaturation")
-
-    # Sleep: look for last night's sleep analysis
-    sleep = await _latest_metric(db, user.id, "SleepAnalysis", since=yesterday_start)
+    latest_result = await db.execute(latest_stmt)
+    latest_map = {row.metric_type: row.value for row in latest_result.all()}
 
     return DashboardSummary(
         steps_today=steps,
         active_energy_today=active_energy,
-        exercise_minutes_today=(
-            activity.exercise_minutes if activity else None
-        ),
-        stand_hours_today=(
-            activity.stand_hours if activity else None
-        ),
-        resting_hr=resting_hr,
-        hrv=hrv,
-        spo2=spo2,
-        sleep_hours_last_night=sleep,
+        exercise_minutes_today=exercise_minutes,
+        stand_hours_today=stand_hours,
+        resting_hr=latest_map.get("RestingHeartRate"),
+        hrv=latest_map.get("HeartRateVariabilitySDNN"),
+        spo2=latest_map.get("OxygenSaturation"),
+        sleep_hours_last_night=latest_map.get("SleepAnalysis"),
     )

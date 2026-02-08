@@ -1,10 +1,12 @@
 """Workout API routes."""
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
@@ -19,18 +21,25 @@ router = APIRouter()
 @router.get("/", response_model=list[WorkoutSummary])
 async def list_workouts(
     activity_type: str | None = Query(default=None),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkoutSummary]:
-    """List workouts for the current user, optionally filtered by activity type."""
+    """List workouts for the current user, optionally filtered by activity type and date range."""
     filters = [Workout.user_id == user.id]
     if activity_type is not None:
         filters.append(Workout.activity_type == activity_type)
+    if start is not None:
+        filters.append(Workout.time >= start)
+    if end is not None:
+        filters.append(Workout.time <= end)
 
     stmt = (
         select(Workout)
+        .options(defer(Workout.metadata_))
         .where(*filters)
         .order_by(Workout.time.desc())
         .limit(limit)

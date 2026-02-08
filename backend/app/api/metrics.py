@@ -57,6 +57,7 @@ async def get_metric_data(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     resolution: Resolution = Query(default=Resolution.day),
+    limit: int = Query(default=10_000, ge=1, le=100_000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MetricResponse:
@@ -75,6 +76,7 @@ async def get_metric_data(
             select(HealthRecord.time, HealthRecord.value)
             .where(*base_filter)
             .order_by(HealthRecord.time)
+            .limit(limit)
         )
         result = await db.execute(stmt)
         rows = result.all()
@@ -82,6 +84,18 @@ async def get_metric_data(
             MetricDataPoint(time=row.time, value=row.value)
             for row in rows
         ]
+
+        # Compute stats from fetched data (avoids a second table scan)
+        if data:
+            values = [d.value for d in data]
+            stats = MetricStats(
+                avg=round(sum(values) / len(values), 4),
+                min=round(min(values), 4),
+                max=round(max(values), 4),
+                count=len(values),
+            )
+        else:
+            stats = MetricStats()
     else:
         # Map resolution to date_trunc interval
         trunc_map = {
@@ -98,6 +112,7 @@ async def get_metric_data(
                 func.avg(HealthRecord.value).label("avg_value"),
                 func.min(HealthRecord.value).label("min_value"),
                 func.max(HealthRecord.value).label("max_value"),
+                func.count().label("cnt"),
             )
             .where(*base_filter)
             .group_by(text("1"))
@@ -115,25 +130,20 @@ async def get_metric_data(
             for row in rows
         ]
 
-    # Compute overall stats
-    stats_stmt = (
-        select(
-            func.avg(HealthRecord.value).label("avg"),
-            func.min(HealthRecord.value).label("min"),
-            func.max(HealthRecord.value).label("max"),
-            func.count().label("count"),
-        )
-        .where(*base_filter)
-    )
-    stats_result = await db.execute(stats_stmt)
-    stats_row = stats_result.one()
-
-    stats = MetricStats(
-        avg=round(stats_row.avg, 4) if stats_row.avg is not None else None,
-        min=round(stats_row.min, 4) if stats_row.min is not None else None,
-        max=round(stats_row.max, 4) if stats_row.max is not None else None,
-        count=stats_row.count,
-    )
+        # Derive global stats from per-bucket aggregates (avoids second scan)
+        if rows:
+            total_count = sum(row.cnt for row in rows)
+            global_min = min(row.min_value for row in rows)
+            global_max = max(row.max_value for row in rows)
+            weighted_avg = sum(row.avg_value * row.cnt for row in rows) / total_count
+            stats = MetricStats(
+                avg=round(weighted_avg, 4),
+                min=round(global_min, 4),
+                max=round(global_max, 4),
+                count=total_count,
+            )
+        else:
+            stats = MetricStats()
 
     # Compute trend percentage (compare last half vs first half of data)
     if len(data) >= 2:

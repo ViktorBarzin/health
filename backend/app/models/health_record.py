@@ -20,6 +20,7 @@ class HealthRecord(Base):
     __tablename__ = "health_records"
     __table_args__ = (
         Index("ix_health_records_user_metric_time", "user_id", "metric_type", "time"),
+        Index("ix_health_records_batch_id", "batch_id"),
         UniqueConstraint(
             "user_id",
             "metric_type",

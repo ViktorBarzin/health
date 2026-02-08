@@ -3,21 +3,27 @@
 Streams through the (potentially multi-GB) ``export.xml`` file produced by
 the Apple Health app, converting elements into database records and persisting
 them in batches for constant memory usage.
+
+Uses a producer-consumer pipeline: the parser (producer) never blocks on DB
+writes — completed batches go onto a bounded ``asyncio.Queue``.  A pool of
+consumer tasks drain the queue into the DB concurrently, with independent
+table inserts running in parallel via ``asyncio.gather``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
-from datetime import date as date_type, datetime, timezone
+from dataclasses import dataclass, field
+from datetime import date as date_type, datetime
 from typing import Any
 
 from lxml import etree
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models.activity_summary import ActivitySummary
 from app.models.data_source import DataSource
 from app.models.import_batch import ImportBatch
 from app.services.dedup import (
@@ -33,7 +39,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 5_000
+BATCH_SIZE = 25_000
+MAX_QUEUE_DEPTH = 8
+NUM_CONSUMERS = 3
 
 _APPLE_DATE_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([+-]\d{4})"
@@ -47,6 +55,9 @@ _WORKOUT_PREFIX = "HKWorkoutActivityType"
 _KCAL_TO_KJ = 4.184
 _CAL_TO_KJ = 0.004184  # dietary Calorie = kcal, small cal = 1/1000 kcal
 
+# Fixed namespace for deterministic workout UUIDs
+_WORKOUT_NS = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
 # Distance conversion factors
 _KM_TO_M = 1_000.0
 _MI_TO_M = 1_609.344
@@ -54,6 +65,31 @@ _MI_TO_M = 1_609.344
 # Duration conversion factors
 _MIN_TO_SEC = 60.0
 _HR_TO_SEC = 3_600.0
+
+# ---------------------------------------------------------------------------
+# BatchPayload
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BatchPayload:
+    """A self-contained batch of parsed records ready for DB insertion."""
+
+    health: list[dict[str, Any]] = field(default_factory=list)
+    category: list[dict[str, Any]] = field(default_factory=list)
+    workouts: list[dict[str, Any]] = field(default_factory=list)
+    route_points: list[dict[str, Any]] = field(default_factory=list)
+    activity: list[dict[str, Any]] = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return (
+            len(self.health)
+            + len(self.category)
+            + len(self.workouts)
+            + len(self.route_points)
+            + len(self.activity)
+        )
+
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -212,6 +248,19 @@ class _DataSourceCache:
     def __init__(self) -> None:
         self._cache: dict[tuple[str, str | None], int] = {}
 
+    async def warm(self, session: AsyncSession) -> None:
+        """Pre-load all existing data sources into the cache."""
+        result = await session.execute(select(DataSource))
+        for source in result.scalars():
+            self._cache[(source.name, source.bundle_id)] = source.id
+
+    def lookup(self, name: str | None, bundle_id: str | None) -> int | None:
+        """Fast-path cache check that requires no DB session."""
+        if not name:
+            return None
+        key = (name, bundle_id)
+        return self._cache.get(key)
+
     async def get_or_create(
         self,
         session: AsyncSession,
@@ -318,13 +367,17 @@ def _process_workout_element(
     source_id: int | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Convert a ``<Workout>`` element into a workout dict and route points."""
-    workout_id = uuid.uuid4()
-
     start = _parse_apple_date(elem.get("startDate"))
     end = _parse_apple_date(elem.get("endDate"))
 
     activity_raw = elem.get("workoutActivityType", "")
     activity_type = _clean_type_name(activity_raw, _WORKOUT_PREFIX)
+
+    # Deterministic UUID from the workout's natural key so re-imports
+    # produce the same ID and ON CONFLICT dedup works correctly.
+    # Must match the UniqueConstraint: (user_id, time, activity_type).
+    dedup_key = f"{user_id}:{start.isoformat() if start else ''}:{activity_type}"
+    workout_id = uuid.uuid5(_WORKOUT_NS, dedup_key)
 
     duration_val = _safe_float(elem.get("duration"))
     duration_unit = elem.get("durationUnit", "min")
@@ -410,6 +463,223 @@ def _process_activity_summary_element(
 
 
 # ---------------------------------------------------------------------------
+# Producer / Consumer pipeline
+# ---------------------------------------------------------------------------
+
+
+async def _producer(
+    file_path: str,
+    user_id: int,
+    batch_id: str,
+    db_session_factory: async_sessionmaker,
+    queue: asyncio.Queue[BatchPayload | None],
+    num_consumers: int,
+    cancelled: list[bool],
+    source_cache: _DataSourceCache,
+) -> int:
+    """Parse the XML file and enqueue batches for consumers.
+
+    Returns the total number of records parsed.
+    """
+    batch = BatchPayload()
+    total_count = 0
+
+    # Use recover=True to tolerate malformed XML (Apple Health exports
+    # sometimes contain unescaped characters in attribute values).
+    context = etree.iterparse(
+        file_path,
+        events=("end",),
+        tag=("Record", "Workout", "ActivitySummary"),
+        recover=True,
+    )
+
+    for _event, elem in context:
+        tag = elem.tag
+
+        # -- Resolve DataSource (shared across record types) ---------------
+        source_name = elem.get("sourceName")
+        bundle_id = elem.get("sourceVersion")  # close proxy
+        device_info = elem.get("device")
+
+        # Fast path: check in-memory cache before touching DB
+        source_id = source_cache.lookup(source_name, bundle_id)
+        if source_id is None and source_name:
+            async with db_session_factory() as session:
+                source_id = await source_cache.get_or_create(
+                    session, source_name, bundle_id, device_info
+                )
+                await session.commit()
+
+        if tag == "Record":
+            result = _process_record_element(
+                elem, user_id, batch_id, source_id
+            )
+            if result is not None:
+                kind, data = result
+                if kind == "health":
+                    batch.health.append(data)
+                else:
+                    batch.category.append(data)
+                total_count += 1
+
+        elif tag == "Workout":
+            workout, route_points = _process_workout_element(
+                elem, user_id, batch_id, source_id
+            )
+            batch.workouts.append(workout)
+            batch.route_points.extend(route_points)
+            total_count += 1
+
+        elif tag == "ActivitySummary":
+            summary = _process_activity_summary_element(elem, user_id)
+            if summary is not None:
+                batch.activity.append(summary)
+                total_count += 1
+
+        # -- Yield to event loop periodically so consumers can work ----------
+        if total_count > 0 and total_count % 2000 == 0:
+            await asyncio.sleep(0)
+
+        # -- Enqueue when batch is full ------------------------------------
+        if len(batch) >= BATCH_SIZE:
+            await queue.put(batch)
+            batch = BatchPayload()
+            if cancelled[0]:
+                break
+
+        # -- Free memory: clear element and preceding siblings -------------
+        elem.clear()
+        while elem.getprevious() is not None:
+            parent = elem.getparent()
+            if parent is None:
+                break
+            del parent[0]
+
+    # Enqueue any remaining records
+    if len(batch) > 0 and not cancelled[0]:
+        await queue.put(batch)
+
+    # Send poison pills so each consumer knows to stop
+    for _ in range(num_consumers):
+        await queue.put(None)
+
+    return total_count
+
+
+async def _consumer(
+    consumer_id: int,
+    db_session_factory: async_sessionmaker,
+    queue: asyncio.Queue[BatchPayload | None],
+    progress: list[int],
+) -> None:
+    """Pull batches from the queue and flush them to the DB."""
+    while True:
+        batch = await queue.get()
+        if batch is None:
+            queue.task_done()
+            return
+        try:
+            await _flush_batch(db_session_factory, batch)
+            progress[0] += len(batch)
+        finally:
+            queue.task_done()
+
+
+async def _flush_batch(
+    db_session_factory: async_sessionmaker,
+    batch: BatchPayload,
+) -> None:
+    """Persist one batch using concurrent table inserts.
+
+    Independent tables (health, category, activity) are written in parallel.
+    Workouts must be committed before route_points (FK constraint), so they
+    share a single sequential coroutine.
+    """
+    coros: list = []
+
+    if batch.health:
+        coros.append(_insert_table(db_session_factory, bulk_insert_health_records, batch.health))
+    if batch.category:
+        coros.append(_insert_table(db_session_factory, bulk_insert_category_records, batch.category))
+    if batch.activity:
+        coros.append(_insert_table(db_session_factory, bulk_insert_activity_summaries, batch.activity))
+    if batch.workouts:
+        coros.append(_insert_workouts_and_routes(db_session_factory, batch.workouts, batch.route_points))
+
+    if coros:
+        await asyncio.gather(*coros)
+
+    logger.debug("Flushed batch to database")
+
+
+async def _insert_table(db_session_factory: async_sessionmaker, insert_fn, rows: list[dict[str, Any]]) -> None:
+    """Insert rows into a single table using its own session."""
+    async with db_session_factory() as session:
+        await insert_fn(session, rows)
+        await session.commit()
+
+
+async def _insert_workouts_and_routes(
+    db_session_factory: async_sessionmaker,
+    workouts: list[dict[str, Any]],
+    route_points: list[dict[str, Any]],
+) -> None:
+    """Insert workouts first, then route points (FK dependency)."""
+    async with db_session_factory() as session:
+        await bulk_insert_workouts(session, workouts)
+        await session.commit()
+
+    if route_points:
+        async with db_session_factory() as session:
+            await bulk_insert_workout_route_points(session, route_points)
+            await session.commit()
+
+
+async def _progress_reporter(
+    db_session_factory: async_sessionmaker,
+    batch_id: str,
+    progress: list[int],
+    cancelled: list[bool],
+    interval: float = 2.0,
+) -> None:
+    """Periodically write the current progress count to import_batches.
+
+    Also polls the batch status — when it reads ``"cancelling"`` it sets the
+    shared *cancelled* flag so the producer can exit early.
+    """
+    last_reported = -1
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            current = progress[0]
+            try:
+                async with db_session_factory() as session:
+                    if current != last_reported:
+                        await session.execute(
+                            update(ImportBatch)
+                            .where(ImportBatch.id == batch_id)
+                            .values(record_count=current)
+                        )
+                        await session.commit()
+                        last_reported = current
+
+                    # Check for cancellation request
+                    result = await session.execute(
+                        select(ImportBatch.status).where(
+                            ImportBatch.id == batch_id
+                        )
+                    )
+                    status = result.scalar_one_or_none()
+                    if status == "cancelling":
+                        cancelled[0] = True
+                        return
+            except Exception:
+                logger.debug("Progress reporter update failed", exc_info=True)
+    except asyncio.CancelledError:
+        return
+
+
+# ---------------------------------------------------------------------------
 # Main parser entry point
 # ---------------------------------------------------------------------------
 
@@ -439,120 +709,100 @@ async def parse_health_export(
     int
         Total number of records processed.
     """
-    health_buf: list[dict[str, Any]] = []
-    category_buf: list[dict[str, Any]] = []
-    workout_buf: list[dict[str, Any]] = []
-    route_point_buf: list[dict[str, Any]] = []
-    activity_buf: list[dict[str, Any]] = []
-
+    queue: asyncio.Queue[BatchPayload | None] = asyncio.Queue(
+        maxsize=MAX_QUEUE_DEPTH
+    )
     total_count = 0
-    source_cache = _DataSourceCache()
+    progress: list[int] = [0]
+    cancelled: list[bool] = [False]
+    reporter_task: asyncio.Task | None = None
 
     try:
-        context = etree.iterparse(
-            file_path,
-            events=("end",),
-            tag=("Record", "Workout", "ActivitySummary"),
-        )
+        # Pre-warm the DataSource cache to avoid per-record DB lookups
+        source_cache = _DataSourceCache()
+        async with db_session_factory() as session:
+            await source_cache.warm(session)
 
-        for _event, elem in context:
-            tag = elem.tag
-
-            # -- Resolve DataSource (shared across record types) -----------
-            source_name = elem.get("sourceName")
-            bundle_id = elem.get("sourceVersion")  # close proxy
-            device_info = elem.get("device")
-
-            if tag == "Record":
-                # Obtain or create source lazily (need a session)
-                async with db_session_factory() as session:
-                    source_id = await source_cache.get_or_create(
-                        session, source_name, bundle_id, device_info
-                    )
-                    await session.commit()
-
-                result = _process_record_element(
-                    elem, user_id, batch_id, source_id
-                )
-                if result is not None:
-                    kind, data = result
-                    if kind == "health":
-                        health_buf.append(data)
-                    else:
-                        category_buf.append(data)
-                    total_count += 1
-
-            elif tag == "Workout":
-                async with db_session_factory() as session:
-                    source_id = await source_cache.get_or_create(
-                        session, source_name, bundle_id, device_info
-                    )
-                    await session.commit()
-
-                workout, route_points = _process_workout_element(
-                    elem, user_id, batch_id, source_id
-                )
-                workout_buf.append(workout)
-                route_point_buf.extend(route_points)
-                total_count += 1
-
-            elif tag == "ActivitySummary":
-                summary = _process_activity_summary_element(elem, user_id)
-                if summary is not None:
-                    activity_buf.append(summary)
-                    total_count += 1
-
-            # -- Flush when any buffer exceeds the batch size ---------------
-            buf_size = (
-                len(health_buf)
-                + len(category_buf)
-                + len(workout_buf)
-                + len(route_point_buf)
-                + len(activity_buf)
+        # Start consumer tasks
+        consumer_tasks = [
+            asyncio.create_task(
+                _consumer(i, db_session_factory, queue, progress),
+                name=f"db-consumer-{i}",
             )
-            if buf_size >= BATCH_SIZE:
-                await _flush_buffers(
-                    db_session_factory,
-                    health_buf,
-                    category_buf,
-                    workout_buf,
-                    route_point_buf,
-                    activity_buf,
-                )
+            for i in range(NUM_CONSUMERS)
+        ]
 
-            # -- Free memory: clear element and preceding siblings ----------
-            elem.clear()
-            while elem.getprevious() is not None:
-                parent = elem.getparent()
-                if parent is None:
-                    break
-                del parent[0]
-
-        # Flush remaining records
-        await _flush_buffers(
-            db_session_factory,
-            health_buf,
-            category_buf,
-            workout_buf,
-            route_point_buf,
-            activity_buf,
+        producer_task = asyncio.create_task(
+            _producer(
+                file_path, user_id, batch_id, db_session_factory,
+                queue, NUM_CONSUMERS, cancelled, source_cache,
+            ),
+            name="xml-producer",
         )
 
-        # Mark import as complete
+        reporter_task = asyncio.create_task(
+            _progress_reporter(db_session_factory, batch_id, progress, cancelled),
+            name="progress-reporter",
+        )
+
+        # Wait for producer or any consumer to finish/fail.
+        # FIRST_EXCEPTION ensures we detect consumer crashes early instead of
+        # the producer deadlocking on a full queue.
+        all_tasks = [producer_task, *consumer_tasks]
+        done, pending = await asyncio.wait(
+            all_tasks, return_when=asyncio.FIRST_EXCEPTION
+        )
+
+        # Check for exceptions in completed tasks
+        for task in done:
+            if task.exception() is not None:
+                # Cancel everything still running
+                for p in pending:
+                    p.cancel()
+                reporter_task.cancel()
+                # Re-raise the first failure
+                raise task.exception()  # type: ignore[misc]
+
+        # If producer finished first (normal path), wait for consumers to
+        # drain the queue
+        if producer_task in done:
+            total_count = producer_task.result()
+            for task in consumer_tasks:
+                if not task.done():
+                    await task
+
+        # Check consumers for late exceptions
+        for task in consumer_tasks:
+            if task.exception() is not None:
+                reporter_task.cancel()
+                raise task.exception()  # type: ignore[misc]
+
+        # Stop the progress reporter
+        reporter_task.cancel()
+        try:
+            await reporter_task
+        except asyncio.CancelledError:
+            pass
+
+        # Mark import as complete or cancelled
+        final_status = "cancelled" if cancelled[0] else "completed"
         async with db_session_factory() as session:
             await session.execute(
                 update(ImportBatch)
                 .where(ImportBatch.id == batch_id)
-                .values(record_count=total_count, status="completed")
+                .values(record_count=total_count, status=final_status)
             )
             await session.commit()
 
         logger.info(
-            "Import %s finished: %d records processed", batch_id, total_count
+            "Import %s finished (%s): %d records processed",
+            batch_id, final_status, total_count,
         )
 
     except Exception:
         logger.exception("Import %s failed", batch_id)
+        if reporter_task is not None:
+            reporter_task.cancel()
         # Best-effort status update
         try:
             async with db_session_factory() as session:
@@ -567,45 +817,3 @@ async def parse_health_export(
         raise
 
     return total_count
-
-
-# ---------------------------------------------------------------------------
-# Internal flush helper
-# ---------------------------------------------------------------------------
-
-
-async def _flush_buffers(
-    db_session_factory: async_sessionmaker,
-    health_buf: list[dict[str, Any]],
-    category_buf: list[dict[str, Any]],
-    workout_buf: list[dict[str, Any]],
-    route_point_buf: list[dict[str, Any]],
-    activity_buf: list[dict[str, Any]],
-) -> None:
-    """Persist all buffered records and clear the buffers."""
-    if not any(
-        [health_buf, category_buf, workout_buf, route_point_buf, activity_buf]
-    ):
-        return
-
-    async with db_session_factory() as session:
-        if health_buf:
-            await bulk_insert_health_records(session, health_buf)
-        if category_buf:
-            await bulk_insert_category_records(session, category_buf)
-        # Workouts must be inserted before route points (FK constraint)
-        if workout_buf:
-            await bulk_insert_workouts(session, workout_buf)
-        if route_point_buf:
-            await bulk_insert_workout_route_points(session, route_point_buf)
-        if activity_buf:
-            await bulk_insert_activity_summaries(session, activity_buf)
-        await session.commit()
-
-    health_buf.clear()
-    category_buf.clear()
-    workout_buf.clear()
-    route_point_buf.clear()
-    activity_buf.clear()
-
-    logger.debug("Flushed batch to database")

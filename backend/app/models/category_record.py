@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,9 @@ from app.database import Base
 
 class CategoryRecord(Base):
     __tablename__ = "category_records"
+    __table_args__ = (
+        Index("ix_category_records_batch_id", "batch_id"),
+    )
 
     time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), primary_key=True
