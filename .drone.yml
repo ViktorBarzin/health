@@ -15,10 +15,6 @@ steps:
       tags:
         - latest
         - ${DRONE_BUILD_NUMBER}
-    privileged: true
-    volumes:
-      - name: dockersock
-        path: /var/run/docker.sock
 
   - name: deploy
     image: curlimages/curl
@@ -34,11 +30,6 @@ steps:
         from_secret: kube_token
       KUBE_SERVER:
         from_secret: kube_server
-
-volumes:
-  - name: dockersock
-    host:
-      path: /var/run/docker.sock
 
 trigger:
   branch:
