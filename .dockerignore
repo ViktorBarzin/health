@@ -1,0 +1,16 @@
+.env
+.git
+.gitignore
+.svelte-kit
+node_modules
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+pgdata
+caddy_data
+uploads
+.DS_Store
+.vscode
+.idea
