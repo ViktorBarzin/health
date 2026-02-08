@@ -19,18 +19,20 @@ function createAuthStore() {
     }
   }
 
-  async function login(email: string) {
-    loading = true;
+  async function login() {
     error = null;
     try {
-      // Step 1: Get authentication options from server
-      const beginResp = await api.post<{ options: Record<string, unknown> }>('/api/auth/login/begin', { email });
+      // Step 1: Get authentication options (no email needed -- discoverable credentials)
+      const beginResp = await api.post<{ challenge_id: string; options: Record<string, unknown> }>('/api/auth/login/begin');
 
       // Step 2: Prompt browser for passkey
       const credential = await startAuthentication(beginResp.options);
 
       // Step 3: Send credential to server for verification
-      user = await api.post<User>('/api/auth/login/complete', { email, credential });
+      user = await api.post<User>('/api/auth/login/complete', {
+        challenge_id: beginResp.challenge_id,
+        credential,
+      });
     } catch (e) {
       if (e instanceof ApiError) {
         error = e.message;
@@ -40,13 +42,10 @@ function createAuthStore() {
         error = 'An unexpected error occurred';
       }
       throw e;
-    } finally {
-      loading = false;
     }
   }
 
   async function register(email: string) {
-    loading = true;
     error = null;
     try {
       // Step 1: Get registration options from server
@@ -66,8 +65,6 @@ function createAuthStore() {
         error = 'An unexpected error occurred';
       }
       throw e;
-    } finally {
-      loading = false;
     }
   }
 

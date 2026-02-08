@@ -80,6 +80,11 @@ export async function startAuthentication(options: Record<string, unknown>): Pro
     ) as PublicKeyCredentialDescriptor[],
   };
 
+  // For discoverable credentials, remove empty allowCredentials
+  if (getOptions.allowCredentials && getOptions.allowCredentials.length === 0) {
+    delete getOptions.allowCredentials;
+  }
+
   const credential = (await navigator.credentials.get({
     publicKey: getOptions,
   })) as PublicKeyCredential;

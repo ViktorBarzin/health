@@ -2,6 +2,7 @@
 
 import base64
 import json
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -49,7 +50,6 @@ async def register_begin(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Begin passkey registration: generate WebAuthn options."""
-    # Find or create user
     result = await db.execute(
         select(User)
         .options(selectinload(User.credentials))
@@ -63,7 +63,6 @@ async def register_begin(
         await db.flush()
         await db.refresh(user, attribute_names=["id", "credentials"])
 
-    # Build exclude list from existing credentials
     exclude_credentials = [
         PublicKeyCredentialDescriptor(
             id=cred.credential_id,
@@ -80,8 +79,8 @@ async def register_begin(
         user_display_name=user.email,
         exclude_credentials=exclude_credentials,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.PREFERRED,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
         ),
     )
 
@@ -125,7 +124,6 @@ async def register_complete(
             detail="User not found. Please start registration again.",
         )
 
-    # Store transports from the client credential response
     transports = body.credential.get("response", {}).get("transports")
     transports_json = json.dumps(transports) if transports else None
 
@@ -146,40 +144,20 @@ async def register_complete(
 
 
 @router.post("/login/begin")
-async def login_begin(
-    body: EmailRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Begin passkey authentication: generate WebAuthn options."""
-    result = await db.execute(
-        select(User)
-        .options(selectinload(User.credentials))
-        .where(User.email == body.email)
-    )
-    user = result.scalar_one_or_none()
-    if user is None or not user.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account or passkey found for this email.",
-        )
-
-    allow_credentials = [
-        PublicKeyCredentialDescriptor(
-            id=cred.credential_id,
-            transports=json.loads(cred.transports) if cred.transports else [],
-        )
-        for cred in user.credentials
-    ]
-
+async def login_begin() -> dict:
+    """Begin passkey authentication with discoverable credentials (no email needed)."""
     options = generate_authentication_options(
         rp_id=settings.WEBAUTHN_RP_ID,
-        allow_credentials=allow_credentials,
-        user_verification=UserVerificationRequirement.PREFERRED,
+        user_verification=UserVerificationRequirement.REQUIRED,
     )
 
-    store_challenge(body.email, options.challenge)
+    challenge_id = secrets.token_urlsafe(32)
+    store_challenge(challenge_id, options.challenge)
 
-    return {"options": json.loads(options_to_json(options))}
+    return {
+        "challenge_id": challenge_id,
+        "options": json.loads(options_to_json(options)),
+    }
 
 
 @router.post("/login/complete", response_model=UserResponse)
@@ -188,39 +166,43 @@ async def login_complete(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
-    """Complete passkey authentication: verify assertion."""
-    challenge = get_challenge(body.email)
+    """Complete passkey authentication: verify assertion using discoverable credential."""
+    challenge = get_challenge(body.challenge_id)
     if challenge is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Challenge expired or not found. Please start login again.",
+            detail="Challenge expired or not found. Please try again.",
         )
 
+    # Find the credential by credential ID from the client response
+    credential_id_b64 = body.credential.get("rawId") or body.credential.get("id")
+    if not credential_id_b64:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing credential ID.",
+        )
+
+    # Decode the base64url credential ID to bytes for DB lookup
+    padded = credential_id_b64 + "=" * (-len(credential_id_b64) % 4)
+    credential_id_bytes = base64.urlsafe_b64decode(padded)
+
     result = await db.execute(
-        select(User)
-        .options(selectinload(User.credentials))
-        .where(User.email == body.email)
+        select(UserCredential).where(UserCredential.credential_id == credential_id_bytes)
     )
-    user = result.scalar_one_or_none()
+    stored_cred = result.scalar_one_or_none()
+    if stored_cred is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credential not recognized.",
+        )
+
+    # Load the user
+    user_result = await db.execute(select(User).where(User.id == stored_cred.user_id))
+    user = user_result.scalar_one_or_none()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found.",
-        )
-
-    # Find the matching credential
-    credential_id_from_client = body.credential.get("rawId") or body.credential.get("id")
-    matching_cred = None
-    for cred in user.credentials:
-        stored_id_b64 = base64.urlsafe_b64encode(cred.credential_id).rstrip(b"=").decode()
-        if stored_id_b64 == credential_id_from_client:
-            matching_cred = cred
-            break
-
-    if matching_cred is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credential not recognized.",
         )
 
     try:
@@ -229,8 +211,8 @@ async def login_complete(
             expected_challenge=challenge,
             expected_rp_id=settings.WEBAUTHN_RP_ID,
             expected_origin=settings.WEBAUTHN_ORIGIN,
-            credential_public_key=matching_cred.public_key,
-            credential_current_sign_count=matching_cred.sign_count,
+            credential_public_key=stored_cred.public_key,
+            credential_current_sign_count=stored_cred.sign_count,
         )
     except Exception as e:
         raise HTTPException(
@@ -238,8 +220,7 @@ async def login_complete(
             detail=f"Authentication verification failed: {e}",
         )
 
-    # Update sign count to prevent replay attacks
-    matching_cred.sign_count = verification.new_sign_count
+    stored_cred.sign_count = verification.new_sign_count
     await db.flush()
 
     token = create_session(user.id)

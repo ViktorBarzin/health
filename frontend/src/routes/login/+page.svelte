@@ -2,17 +2,15 @@
   import { auth } from '$lib/stores/auth.svelte';
   import { goto } from '$app/navigation';
 
-  let email = $state('');
   let error = $state('');
   let loading = $state(false);
 
-  async function handleSubmit(e: Event) {
-    e.preventDefault();
+  async function handleLogin() {
     error = '';
     loading = true;
 
     try {
-      await auth.login(email);
+      await auth.login();
       goto('/');
     } catch (err) {
       if (err instanceof Error) {
@@ -39,7 +37,7 @@
       <p class="text-sm text-surface-500 mt-1">Sign in to your account</p>
     </div>
 
-    <!-- Login form -->
+    <!-- Login -->
     <div class="bg-surface-900 rounded-xl border border-surface-700 p-6">
       {#if error}
         <div class="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -47,47 +45,28 @@
         </div>
       {/if}
 
-      <form onsubmit={handleSubmit} class="space-y-4">
-        <div>
-          <label for="email" class="block text-sm font-medium text-surface-300 mb-1.5">
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            bind:value={email}
-            required
-            placeholder="you@example.com"
-            class="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-lg
-                   text-surface-100 placeholder-surface-500 text-sm
-                   focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
-                   transition-colors"
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={loading}
-          class="w-full py-2.5 px-4 bg-primary-500 hover:bg-primary-600 disabled:opacity-50
-                 disabled:cursor-not-allowed text-white font-medium text-sm rounded-lg
-                 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
-                 focus:ring-offset-surface-900"
-        >
-          {#if loading}
-            <span class="flex items-center justify-center gap-2">
-              <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              Waiting for passkey...
-            </span>
-          {:else}
-            <span class="flex items-center justify-center gap-2">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
-              </svg>
-              Sign in with passkey
-            </span>
-          {/if}
-        </button>
-      </form>
+      <button
+        onclick={handleLogin}
+        disabled={loading}
+        class="w-full py-2.5 px-4 bg-primary-500 hover:bg-primary-600 disabled:opacity-50
+               disabled:cursor-not-allowed text-white font-medium text-sm rounded-lg
+               transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2
+               focus:ring-offset-surface-900"
+      >
+        {#if loading}
+          <span class="flex items-center justify-center gap-2">
+            <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            Waiting for passkey...
+          </span>
+        {:else}
+          <span class="flex items-center justify-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+            </svg>
+            Sign in with passkey
+          </span>
+        {/if}
+      </button>
     </div>
 
     <!-- Register link -->

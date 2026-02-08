@@ -50,15 +50,15 @@
   });
 </script>
 
-{#if auth.loading}
+{#if isPublicPage}
+  {@render children()}
+{:else if auth.loading}
   <div class="flex items-center justify-center min-h-screen bg-surface-950">
     <div class="flex flex-col items-center gap-4">
       <div class="w-10 h-10 border-3 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
       <p class="text-surface-400 text-sm">Loading...</p>
     </div>
   </div>
-{:else if isPublicPage}
-  {@render children()}
 {:else if auth.user}
   <div class="flex h-screen overflow-hidden bg-surface-950">
     <!-- Mobile overlay -->

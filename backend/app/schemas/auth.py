@@ -10,17 +10,13 @@ class EmailRequest(BaseModel):
     email: EmailStr
 
 
-class RegistrationOptionsResponse(BaseModel):
-    options: dict[str, Any]
-
-
 class RegisterCompleteRequest(BaseModel):
     email: EmailStr
     credential: dict[str, Any]
 
 
 class LoginCompleteRequest(BaseModel):
-    email: EmailStr
+    challenge_id: str
     credential: dict[str, Any]
 
 

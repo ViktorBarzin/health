@@ -8,20 +8,20 @@ from app.config import settings
 # In-memory session store: token -> {"user_id": int, "created_at": float}
 _sessions: dict[str, dict] = {}
 
-# In-memory challenge store: email -> (challenge_bytes, expiry_timestamp)
+# In-memory challenge store: key -> (challenge_bytes, expiry_timestamp)
 _challenges: dict[str, tuple[bytes, float]] = {}
 
 _CHALLENGE_TTL = 300  # 5 minutes
 
 
-def store_challenge(email: str, challenge: bytes) -> None:
-    """Store a WebAuthn challenge for the given email with a 5-minute TTL."""
-    _challenges[email] = (challenge, time.time() + _CHALLENGE_TTL)
+def store_challenge(key: str, challenge: bytes) -> None:
+    """Store a WebAuthn challenge with a 5-minute TTL."""
+    _challenges[key] = (challenge, time.time() + _CHALLENGE_TTL)
 
 
-def get_challenge(email: str) -> bytes | None:
-    """Pop and return the stored challenge for email, or None if expired/missing."""
-    entry = _challenges.pop(email, None)
+def get_challenge(key: str) -> bytes | None:
+    """Pop and return the stored challenge, or None if expired/missing."""
+    entry = _challenges.pop(key, None)
     if entry is None:
         return None
     challenge, expiry = entry
