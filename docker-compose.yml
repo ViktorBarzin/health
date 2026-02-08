@@ -23,26 +23,16 @@ services:
 
   frontend:
     build: ./frontend
+    ports:
+      - "8080:3000"
     environment:
       PUBLIC_API_URL: ""
+      API_BACKEND_URL: http://backend:8000
+      BODY_SIZE_LIMIT: "Infinity"
     depends_on:
       - backend
-    restart: unless-stopped
-
-  caddy:
-    image: caddy:2
-    ports:
-      - "8080:80"
-      - "8443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    depends_on:
-      - backend
-      - frontend
     restart: unless-stopped
 
 volumes:
   pgdata:
   uploads:
-  caddy_data:

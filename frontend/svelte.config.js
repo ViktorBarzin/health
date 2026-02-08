@@ -2,6 +2,7 @@ import adapter from '@sveltejs/adapter-node';
 
 export default {
   kit: {
-    adapter: adapter({ out: 'build' })
+    adapter: adapter({ out: 'build' }),
+    csrf: { checkOrigin: false }
   }
 };

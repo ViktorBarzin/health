@@ -3,14 +3,13 @@
 ## Overview
 
 Full-stack Apple Health data dashboard: FastAPI backend, SvelteKit frontend, TimescaleDB,
-WebAuthn auth, Caddy reverse proxy. Imports Apple Health XML/ZIP exports and provides
-interactive visualizations.
+WebAuthn auth. Imports Apple Health XML/ZIP exports and provides interactive visualizations.
 
 ## Architecture
 
 ```
-Caddy (:8080/:8443) → /api/*     → Backend (FastAPI :8000)
-                    → /*          → Frontend (SvelteKit :3000)
+SvelteKit (:3000) → /api/*  → Backend (FastAPI :8000, internal proxy)
+                  → /*      → SvelteKit SSR
 ```
 
 **Stack:** Python 3.12, FastAPI, SQLAlchemy async + asyncpg, TimescaleDB (PG16), SvelteKit, Docker Compose
@@ -125,7 +124,7 @@ frontend/src/
 
 WebAuthn passkeys (discoverable credentials). No passwords.
 - Sessions: in-memory dict, HTTP-only cookie named `session`, 30-day expiry
-- RP ID: `localhost`, Origin: `http://localhost:8080`
+- RP ID: `localhost`, Origin: `http://localhost:3000`
 - All API endpoints except `/api/health` and `/api/auth/*` require auth
 
 ## Migrations

@@ -5,13 +5,9 @@ set -e
 cd /app/backend
 alembic upgrade head
 
-# Start frontend
-cd /app/frontend
-node build &
-
-# Start backend
-cd /app/backend
+# Start backend in background
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 
-# Start Caddy (foreground — PID 1 signal handling)
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# Start frontend as PID 1
+cd /app/frontend
+exec node build
