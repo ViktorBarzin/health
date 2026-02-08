@@ -33,6 +33,7 @@ class MetricStats(BaseModel):
     avg: float | None = None
     min: float | None = None
     max: float | None = None
+    total: float | None = None
     count: int = 0
     trend_pct: float | None = None
 

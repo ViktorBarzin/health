@@ -22,6 +22,7 @@ export interface MetricStats {
   avg: number;
   min: number;
   max: number;
+  total: number | null;
   count: number;
   trend_pct?: number;
 }
@@ -74,10 +75,10 @@ export interface ImportStatus {
 
 export interface ActivityRingData {
   date: string;
-  active_energy: number;
-  active_energy_goal: number;
-  exercise_minutes: number;
-  exercise_goal: number;
-  stand_hours: number;
-  stand_goal: number;
+  active_energy_burned_kj: number | null;
+  active_energy_goal_kj: number | null;
+  exercise_minutes: number | null;
+  exercise_goal_minutes: number | null;
+  stand_hours: number | null;
+  stand_goal_hours: number | null;
 }

@@ -483,6 +483,12 @@ async def _producer(
     """
     batch = BatchPayload()
     total_count = 0
+    health_count = 0
+    category_count = 0
+    workout_count = 0
+    route_point_count = 0
+    activity_count = 0
+    skipped_workouts = 0
 
     # Use recover=True to tolerate malformed XML (Apple Health exports
     # sometimes contain unescaped characters in attribute values).
@@ -518,22 +524,34 @@ async def _producer(
                 kind, data = result
                 if kind == "health":
                     batch.health.append(data)
+                    health_count += 1
                 else:
                     batch.category.append(data)
+                    category_count += 1
                 total_count += 1
 
         elif tag == "Workout":
             workout, route_points = _process_workout_element(
                 elem, user_id, batch_id, source_id
             )
-            batch.workouts.append(workout)
-            batch.route_points.extend(route_points)
-            total_count += 1
+            if workout["time"] is None:
+                logger.warning(
+                    "Skipping workout with unparseable startDate: %s",
+                    elem.get("startDate"),
+                )
+                skipped_workouts += 1
+            else:
+                batch.workouts.append(workout)
+                batch.route_points.extend(route_points)
+                workout_count += 1
+                route_point_count += len(route_points)
+                total_count += 1
 
         elif tag == "ActivitySummary":
             summary = _process_activity_summary_element(elem, user_id)
             if summary is not None:
                 batch.activity.append(summary)
+                activity_count += 1
                 total_count += 1
 
         # -- Yield to event loop periodically so consumers can work ----------
@@ -562,6 +580,13 @@ async def _producer(
     # Send poison pills so each consumer knows to stop
     for _ in range(num_consumers):
         await queue.put(None)
+
+    logger.info(
+        "Parsing complete: %d health, %d category, %d workouts (%d route pts), "
+        "%d activity summaries, %d total (%d workouts skipped)",
+        health_count, category_count, workout_count, route_point_count,
+        activity_count, total_count, skipped_workouts,
+    )
 
     return total_count
 
@@ -592,8 +617,8 @@ async def _flush_batch(
     """Persist one batch using concurrent table inserts.
 
     Independent tables (health, category, activity) are written in parallel.
-    Workouts must be committed before route_points (FK constraint), so they
-    share a single sequential coroutine.
+    Workouts are inserted separately so that a workout failure doesn't cancel
+    the independent inserts via ``asyncio.gather``.
     """
     coros: list = []
 
@@ -603,11 +628,20 @@ async def _flush_batch(
         coros.append(_insert_table(db_session_factory, bulk_insert_category_records, batch.category))
     if batch.activity:
         coros.append(_insert_table(db_session_factory, bulk_insert_activity_summaries, batch.activity))
-    if batch.workouts:
-        coros.append(_insert_workouts_and_routes(db_session_factory, batch.workouts, batch.route_points))
 
     if coros:
         await asyncio.gather(*coros)
+
+    # Workouts separately so failures don't cancel independent inserts
+    if batch.workouts:
+        try:
+            await _insert_workouts_and_routes(db_session_factory, batch.workouts, batch.route_points)
+        except Exception:
+            logger.exception(
+                "Failed to insert %d workouts (%d route points) — "
+                "health/category/activity records from this batch were saved",
+                len(batch.workouts), len(batch.route_points),
+            )
 
     logger.debug("Flushed batch to database")
 

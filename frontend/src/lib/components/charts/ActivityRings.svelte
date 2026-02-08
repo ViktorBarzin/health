@@ -17,22 +17,22 @@
   const rings = $derived([
     {
       label: 'Move',
-      value: data.active_energy,
-      goal: data.active_energy_goal,
+      value: data.active_energy_burned_kj ?? 0,
+      goal: data.active_energy_goal_kj ?? 1,
       color: '#ef4444',
       radius: center - strokeWidth * 0.7,
     },
     {
       label: 'Exercise',
-      value: data.exercise_minutes,
-      goal: data.exercise_goal,
+      value: data.exercise_minutes ?? 0,
+      goal: data.exercise_goal_minutes ?? 1,
       color: '#22c55e',
       radius: center - strokeWidth * 2,
     },
     {
       label: 'Stand',
-      value: data.stand_hours,
-      goal: data.stand_goal,
+      value: data.stand_hours ?? 0,
+      goal: data.stand_goal_hours ?? 1,
       color: '#06b6d4',
       radius: center - strokeWidth * 3.3,
     },

@@ -1,6 +1,6 @@
 """Dashboard API routes."""
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func, select
@@ -22,8 +22,14 @@ _LATEST_METRICS = [
     "RestingHeartRate",
     "HeartRateVariabilitySDNN",
     "OxygenSaturation",
-    "SleepAnalysis",
 ]
+
+
+def _end_of_day(dt_val: datetime) -> datetime:
+    """Adjust a midnight datetime to end-of-day so the full day is included."""
+    if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
+        return dt_val + timedelta(days=1)
+    return dt_val
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -44,7 +50,7 @@ async def get_dashboard_summary(
     else:
         range_start = start
 
-    range_end = end  # None means unbounded upper
+    range_end = _end_of_day(end) if end is not None else None
 
     # Get activity summary for the range
     activity_filters = [ActivitySummary.user_id == user.id]
@@ -52,8 +58,8 @@ async def get_dashboard_summary(
         activity_filters.append(ActivitySummary.date >= start.date())
     else:
         activity_filters.append(ActivitySummary.date == date.today())
-    if range_end is not None:
-        activity_filters.append(ActivitySummary.date <= range_end.date())
+    if end is not None:
+        activity_filters.append(ActivitySummary.date <= end.date())
 
     activity_stmt = select(
         func.sum(ActivitySummary.exercise_minutes),

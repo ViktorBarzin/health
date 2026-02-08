@@ -1,7 +1,7 @@
 """Workout API routes."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -16,6 +16,13 @@ from app.models.workout_route_point import WorkoutRoutePoint
 from app.schemas.workouts import RoutePoint, WorkoutDetail, WorkoutSummary
 
 router = APIRouter()
+
+
+def _end_of_day(dt_val: datetime) -> datetime:
+    """Adjust a midnight datetime to end-of-day so the full day is included."""
+    if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
+        return dt_val + timedelta(days=1)
+    return dt_val
 
 
 @router.get("/", response_model=list[WorkoutSummary])
@@ -35,7 +42,7 @@ async def list_workouts(
     if start is not None:
         filters.append(Workout.time >= start)
     if end is not None:
-        filters.append(Workout.time <= end)
+        filters.append(Workout.time <= _end_of_day(end))
 
     stmt = (
         select(Workout)

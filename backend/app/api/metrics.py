@@ -1,6 +1,6 @@
 """Health metrics API routes."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
@@ -19,6 +19,13 @@ from app.schemas.metrics import (
 )
 
 router = APIRouter()
+
+
+def _end_of_day(dt_val: datetime) -> datetime:
+    """Adjust a midnight datetime to end-of-day so the full day is included."""
+    if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
+        return dt_val + timedelta(days=1)
+    return dt_val
 
 
 @router.get("/available", response_model=list[MetricAvailable])
@@ -69,7 +76,7 @@ async def get_metric_data(
     if start is not None:
         base_filter.append(HealthRecord.time >= start)
     if end is not None:
-        base_filter.append(HealthRecord.time <= end)
+        base_filter.append(HealthRecord.time <= _end_of_day(end))
 
     if resolution == Resolution.raw:
         stmt = (
@@ -92,6 +99,7 @@ async def get_metric_data(
                 avg=round(sum(values) / len(values), 4),
                 min=round(min(values), 4),
                 max=round(max(values), 4),
+                total=round(sum(values), 4),
                 count=len(values),
             )
         else:
@@ -136,10 +144,12 @@ async def get_metric_data(
             global_min = min(row.min_value for row in rows)
             global_max = max(row.max_value for row in rows)
             weighted_avg = sum(row.avg_value * row.cnt for row in rows) / total_count
+            global_total = sum(row.avg_value * row.cnt for row in rows)
             stats = MetricStats(
                 avg=round(weighted_avg, 4),
                 min=round(global_min, 4),
                 max=round(global_max, 4),
+                total=round(global_total, 4),
                 count=total_count,
             )
         else:

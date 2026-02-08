@@ -17,27 +17,20 @@
   let loading = $state(true);
 
   $effect(() => {
-    const _s = dateRange.startISO;
-    const _e = dateRange.endISO;
-    const _r = dateRange.resolution;
-    loadDashboard();
+    loadDashboard(dateRange.startISO, dateRange.endISO, dateRange.resolution);
   });
 
-  async function loadDashboard() {
+  async function loadDashboard(start: string, end: string, resolution: string) {
     loading = true;
-
-    const start = dateRange.startISO;
-    const end = dateRange.endISO;
-    const resolution = dateRange.resolution;
 
     try {
       const [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes] = await Promise.allSettled([
         api.get<DashboardSummary>(`/api/dashboard/summary?start=${start}&end=${end}`),
         api.get<ActivityRingData[]>(`/api/activity/rings?start=${start}&end=${end}`),
-        api.get<MetricResponse>(`/api/metrics/steps?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/active_energy?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/heart_rate?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/exercise_minutes?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/StepCount?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/ActiveEnergyBurned?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/HeartRate?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/AppleExerciseTime?start=${start}&end=${end}&resolution=${resolution}`),
       ]);
 
       if (summaryRes.status === 'fulfilled') summary = summaryRes.value;
@@ -57,6 +50,19 @@
   let energySparkline = $derived(energyData?.data.map((d) => d.value) ?? []);
   let hrSparkline = $derived(hrData?.data.map((d) => d.value) ?? []);
   let exerciseSparkline = $derived(exerciseData?.data.map((d) => d.value) ?? []);
+
+  // Derive aggregate values from metrics data (updates with date range)
+  // falling back to summary data for fields only the summary endpoint provides.
+  let effectiveSummary = $derived<DashboardSummary>({
+    steps_today: stepsData?.stats.total ?? summary?.steps_today ?? null,
+    active_energy_today: energyData?.stats.total ?? summary?.active_energy_today ?? null,
+    exercise_minutes_today: exerciseData?.stats.total ?? summary?.exercise_minutes_today ?? null,
+    stand_hours_today: summary?.stand_hours_today ?? null,
+    resting_hr: summary?.resting_hr ?? null,
+    hrv: summary?.hrv ?? null,
+    spo2: summary?.spo2 ?? null,
+    sleep_hours_last_night: summary?.sleep_hours_last_night ?? null,
+  });
 </script>
 
 <div class="space-y-6">
@@ -78,7 +84,7 @@
     </div>
 
     <!-- Today summary -->
-    <TodaySummary {summary} {loading} />
+    <TodaySummary summary={effectiveSummary} {loading} />
   </div>
 
   <!-- Metric cards with sparklines -->
@@ -97,7 +103,7 @@
     {:else}
       <MetricCard
         title="Steps"
-        value={summary?.steps_today ?? null}
+        value={effectiveSummary.steps_today}
         unit="steps"
         trend={stepsData?.stats.trend_pct ?? null}
         sparklineData={stepsSparkline}
@@ -106,7 +112,7 @@
       />
       <MetricCard
         title="Active Energy"
-        value={summary?.active_energy_today != null ? Math.round(summary.active_energy_today) : null}
+        value={effectiveSummary.active_energy_today != null ? Math.round(effectiveSummary.active_energy_today) : null}
         unit="kcal"
         trend={energyData?.stats.trend_pct ?? null}
         sparklineData={energySparkline}
@@ -115,7 +121,7 @@
       />
       <MetricCard
         title="Heart Rate"
-        value={summary?.resting_hr ?? null}
+        value={hrData?.stats.avg != null ? Math.round(hrData.stats.avg) : (effectiveSummary.resting_hr != null ? Math.round(effectiveSummary.resting_hr) : null)}
         unit="bpm"
         trend={hrData?.stats.trend_pct ?? null}
         sparklineData={hrSparkline}
@@ -124,7 +130,7 @@
       />
       <MetricCard
         title="Exercise"
-        value={summary?.exercise_minutes_today ?? null}
+        value={effectiveSummary.exercise_minutes_today != null ? Math.round(effectiveSummary.exercise_minutes_today) : null}
         unit="min"
         trend={exerciseData?.stats.trend_pct ?? null}
         sparklineData={exerciseSparkline}
@@ -137,6 +143,6 @@
   <!-- Bottom row: Recent Workouts + Sleep Summary -->
   <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
     <RecentWorkouts start={dateRange.startISO} end={dateRange.endISO} />
-    <SleepSummary {summary} {loading} />
+    <SleepSummary summary={effectiveSummary} {loading} />
   </div>
 </div>
