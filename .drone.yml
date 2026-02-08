@@ -1,5 +1,5 @@
 kind: pipeline
-type: docker
+type: kubernetes
 name: default
 
 steps:
@@ -15,14 +15,13 @@ steps:
       tags:
         - latest
         - ${DRONE_BUILD_NUMBER}
+    privileged: true
+    volumes:
+      - name: dockersock
+        path: /var/run/docker.sock
 
   - name: deploy
     image: curlimages/curl
-    environment:
-      KUBE_TOKEN:
-        from_secret: kube_token
-      KUBE_SERVER:
-        from_secret: kube_server
     commands:
       - |
         curl -sSk -X PATCH \
@@ -30,6 +29,16 @@ steps:
           -H "Content-Type: application/strategic-merge-patch+json" \
           --data '{"spec":{"template":{"metadata":{"annotations":{"drone-build":"${DRONE_BUILD_NUMBER}"}}}}}' \
           "$$KUBE_SERVER/apis/apps/v1/namespaces/health/deployments/health"
+    environment:
+      KUBE_TOKEN:
+        from_secret: kube_token
+      KUBE_SERVER:
+        from_secret: kube_server
+
+volumes:
+  - name: dockersock
+    host:
+      path: /var/run/docker.sock
 
 trigger:
   branch:
