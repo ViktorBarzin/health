@@ -6,22 +6,25 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY frontend/ .
 RUN npm run build
 
-# Stage 2: Final image
+# Stage 2: Download Caddy
+FROM alpine:3 AS caddy
+RUN apk add --no-cache curl && \
+    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')" -o /usr/bin/caddy && \
+    chmod +x /usr/bin/caddy
+
+# Stage 3: Final image
 FROM python:3.12-slim
 
-# Install Node.js, Caddy, and build deps
+# Install Node.js and build deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2-dev libxslt1-dev gcc \
-    curl debian-keyring debian-archive-keyring apt-transport-https gpg && \
+    libxml2-dev libxslt1-dev gcc curl && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
-      gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && \
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | \
-      tee /etc/apt/sources.list.d/caddy-stable.list && \
-    apt-get update && apt-get install -y --no-install-recommends caddy && \
-    apt-get purge -y --auto-remove curl gpg debian-keyring debian-archive-keyring apt-transport-https && \
+    apt-get purge -y --auto-remove curl && \
     rm -rf /var/lib/apt/lists/*
+
+# Copy Caddy binary
+COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 
 # Install backend Python dependencies
 WORKDIR /app/backend
