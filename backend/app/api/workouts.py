@@ -1,7 +1,7 @@
 """Workout API routes."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -18,8 +18,16 @@ from app.schemas.workouts import RoutePoint, WorkoutDetail, WorkoutSummary
 router = APIRouter()
 
 
+def _ensure_utc(dt_val: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware (UTC)."""
+    if dt_val.tzinfo is None:
+        return dt_val.replace(tzinfo=timezone.utc)
+    return dt_val
+
+
 def _end_of_day(dt_val: datetime) -> datetime:
     """Adjust a midnight datetime to end-of-day so the full day is included."""
+    dt_val = _ensure_utc(dt_val)
     if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
         return dt_val + timedelta(days=1)
     return dt_val
@@ -40,7 +48,7 @@ async def list_workouts(
     if activity_type is not None:
         filters.append(Workout.activity_type == activity_type)
     if start is not None:
-        filters.append(Workout.time >= start)
+        filters.append(Workout.time >= _ensure_utc(start))
     if end is not None:
         filters.append(Workout.time <= _end_of_day(end))
 

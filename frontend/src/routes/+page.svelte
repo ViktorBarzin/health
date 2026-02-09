@@ -15,6 +15,8 @@
   let hrData = $state<MetricResponse | null>(null);
   let exerciseData = $state<MetricResponse | null>(null);
   let loading = $state(true);
+  let error = $state<string | null>(null);
+  let loadVersion = $state(0);
 
   $effect(() => {
     loadDashboard(dateRange.startISO, dateRange.endISO, dateRange.resolution);
@@ -22,6 +24,16 @@
 
   async function loadDashboard(start: string, end: string, resolution: string) {
     loading = true;
+    error = null;
+    const version = ++loadVersion;
+
+    // Reset state so stale data from a previous range doesn't persist
+    summary = null;
+    rings = null;
+    stepsData = null;
+    energyData = null;
+    hrData = null;
+    exerciseData = null;
 
     try {
       const [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes] = await Promise.allSettled([
@@ -33,16 +45,34 @@
         api.get<MetricResponse>(`/api/metrics/AppleExerciseTime?start=${start}&end=${end}&resolution=${resolution}`),
       ]);
 
+      // Ignore results from outdated requests (user changed range while loading)
+      if (version !== loadVersion) return;
+
       if (summaryRes.status === 'fulfilled') summary = summaryRes.value;
       if (ringsRes.status === 'fulfilled' && ringsRes.value.length > 0) rings = ringsRes.value[0];
       if (stepsRes.status === 'fulfilled') stepsData = stepsRes.value;
       if (energyRes.status === 'fulfilled') energyData = energyRes.value;
       if (hrRes.status === 'fulfilled') hrData = hrRes.value;
       if (exerciseRes.status === 'fulfilled') exerciseData = exerciseRes.value;
+
+      // Check if all requests failed
+      const allFailed = [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes]
+        .every(r => r.status === 'rejected');
+      if (allFailed) {
+        const firstError = [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes]
+          .find(r => r.status === 'rejected');
+        error = firstError?.status === 'rejected' && firstError.reason instanceof Error
+          ? firstError.reason.message
+          : 'Failed to load dashboard data';
+      }
     } catch {
-      // Individual errors are handled by settled results
+      if (version === loadVersion) {
+        error = 'Failed to load dashboard data';
+      }
     } finally {
-      loading = false;
+      if (version === loadVersion) {
+        loading = false;
+      }
     }
   }
 
@@ -66,6 +96,12 @@
 </script>
 
 <div class="space-y-6">
+  {#if error && !loading}
+    <div class="rounded-xl bg-red-900/20 border border-red-700/50 p-4">
+      <p class="text-red-400 text-sm">{error}</p>
+    </div>
+  {/if}
+
   <!-- Top row: Activity Rings + Today Summary -->
   <div class="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-6">
     <!-- Activity Rings -->

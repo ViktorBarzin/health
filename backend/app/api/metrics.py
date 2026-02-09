@@ -1,6 +1,6 @@
 """Health metrics API routes."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
@@ -21,8 +21,16 @@ from app.schemas.metrics import (
 router = APIRouter()
 
 
+def _ensure_utc(dt_val: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware (UTC)."""
+    if dt_val.tzinfo is None:
+        return dt_val.replace(tzinfo=timezone.utc)
+    return dt_val
+
+
 def _end_of_day(dt_val: datetime) -> datetime:
     """Adjust a midnight datetime to end-of-day so the full day is included."""
+    dt_val = _ensure_utc(dt_val)
     if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
         return dt_val + timedelta(days=1)
     return dt_val
@@ -74,7 +82,7 @@ async def get_metric_data(
         HealthRecord.metric_type == metric_type,
     ]
     if start is not None:
-        base_filter.append(HealthRecord.time >= start)
+        base_filter.append(HealthRecord.time >= _ensure_utc(start))
     if end is not None:
         base_filter.append(HealthRecord.time <= _end_of_day(end))
 

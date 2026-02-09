@@ -25,8 +25,21 @@ _LATEST_METRICS = [
 ]
 
 
+def _ensure_utc(dt_val: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware (UTC).
+
+    asyncpg requires timezone-aware datetimes for TIMESTAMPTZ columns.
+    Date-only query strings are parsed as naive midnight datetimes by
+    FastAPI/Pydantic, which can cause errors or wrong comparisons.
+    """
+    if dt_val.tzinfo is None:
+        return dt_val.replace(tzinfo=timezone.utc)
+    return dt_val
+
+
 def _end_of_day(dt_val: datetime) -> datetime:
     """Adjust a midnight datetime to end-of-day so the full day is included."""
+    dt_val = _ensure_utc(dt_val)
     if dt_val.hour == 0 and dt_val.minute == 0 and dt_val.second == 0:
         return dt_val + timedelta(days=1)
     return dt_val
@@ -48,7 +61,7 @@ async def get_dashboard_summary(
         today = date.today()
         range_start = datetime.combine(today, time.min, tzinfo=timezone.utc)
     else:
-        range_start = start
+        range_start = _ensure_utc(start)
 
     range_end = _end_of_day(end) if end is not None else None
 
