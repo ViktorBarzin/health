@@ -36,31 +36,42 @@
     exerciseData = null;
 
     try {
-      const [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes] = await Promise.allSettled([
+      // Batch requests to avoid overwhelming the backend/DB with concurrent connections.
+      // Batch 1: summary + activity rings
+      const [summaryRes, ringsRes] = await Promise.allSettled([
         api.get<DashboardSummary>(`/api/dashboard/summary?start=${start}&end=${end}`),
         api.get<ActivityRingData[]>(`/api/activity/rings?start=${start}&end=${end}`),
-        api.get<MetricResponse>(`/api/metrics/StepCount?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/ActiveEnergyBurned?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/HeartRate?start=${start}&end=${end}&resolution=${resolution}`),
-        api.get<MetricResponse>(`/api/metrics/AppleExerciseTime?start=${start}&end=${end}&resolution=${resolution}`),
       ]);
-
-      // Ignore results from outdated requests (user changed range while loading)
       if (version !== loadVersion) return;
 
       if (summaryRes.status === 'fulfilled') summary = summaryRes.value;
       if (ringsRes.status === 'fulfilled' && ringsRes.value.length > 0) rings = ringsRes.value[0];
+
+      // Batch 2: steps + energy sparklines
+      const [stepsRes, energyRes] = await Promise.allSettled([
+        api.get<MetricResponse>(`/api/metrics/StepCount?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/ActiveEnergyBurned?start=${start}&end=${end}&resolution=${resolution}`),
+      ]);
+      if (version !== loadVersion) return;
+
       if (stepsRes.status === 'fulfilled') stepsData = stepsRes.value;
       if (energyRes.status === 'fulfilled') energyData = energyRes.value;
+
+      // Batch 3: heart rate + exercise sparklines
+      const [hrRes, exerciseRes] = await Promise.allSettled([
+        api.get<MetricResponse>(`/api/metrics/HeartRate?start=${start}&end=${end}&resolution=${resolution}`),
+        api.get<MetricResponse>(`/api/metrics/AppleExerciseTime?start=${start}&end=${end}&resolution=${resolution}`),
+      ]);
+      if (version !== loadVersion) return;
+
       if (hrRes.status === 'fulfilled') hrData = hrRes.value;
       if (exerciseRes.status === 'fulfilled') exerciseData = exerciseRes.value;
 
       // Check if all requests failed
-      const allFailed = [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes]
-        .every(r => r.status === 'rejected');
+      const results = [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes];
+      const allFailed = results.every(r => r.status === 'rejected');
       if (allFailed) {
-        const firstError = [summaryRes, ringsRes, stepsRes, energyRes, hrRes, exerciseRes]
-          .find(r => r.status === 'rejected');
+        const firstError = results.find(r => r.status === 'rejected');
         error = firstError?.status === 'rejected' && firstError.reason instanceof Error
           ? firstError.reason.message
           : 'Failed to load dashboard data';
