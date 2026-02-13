@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import type { WorkoutSummary } from '$lib/types';
+  import { formatDuration, formatDistance, formatEnergy } from '$lib/utils/format';
 
   interface Props {
     start?: string;
@@ -32,25 +33,6 @@
     } finally {
       loading = false;
     }
-  }
-
-  function formatDuration(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  }
-
-  function formatDistance(meters: number): string {
-    if (meters >= 1000) {
-      return `${(meters / 1000).toFixed(1)} km`;
-    }
-    return `${Math.round(meters)} m`;
-  }
-
-  function formatEnergy(kj: number): string {
-    const kcal = Math.round(kj / 4.184);
-    return `${kcal} kcal`;
   }
 
   function formatDate(iso: string): string {

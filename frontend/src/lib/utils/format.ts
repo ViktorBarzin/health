@@ -70,6 +70,14 @@ export function formatDistance(meters: number): string {
 }
 
 /**
+ * Format an energy value in kilojoules as human-readable kilocalories.
+ */
+export function formatEnergy(kj: number): string {
+  const kcal = Math.round(kj / 4.184);
+  return `${kcal} kcal`;
+}
+
+/**
  * Smart-format a metric value based on its unit.
  */
 export function formatMetricValue(value: number, unit: string): string {

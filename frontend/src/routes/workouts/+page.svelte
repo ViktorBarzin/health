@@ -2,7 +2,7 @@
   import { api } from '$lib/api';
   import type { WorkoutSummary } from '$lib/types';
   import { WORKOUT_LABELS } from '$lib/utils/constants';
-  import { formatDate, formatDuration, formatDistance, formatNumber } from '$lib/utils/format';
+  import { formatDate, formatDuration, formatDistance, formatNumber, formatEnergy } from '$lib/utils/format';
   import { dateRange } from '$lib/stores/date-range.svelte';
 
   let workouts = $state<WorkoutSummary[]>([]);
@@ -80,10 +80,6 @@
 
   function getIcon(type: string): string {
     return WORKOUT_ICONS[type] ?? '\u{1F3C6}';
-  }
-
-  function energyKcal(kj: number): number {
-    return Math.round(kj / 4.184);
   }
 </script>
 
@@ -196,7 +192,7 @@
               <div class="hidden sm:block">
                 <p class="text-xs text-surface-500">Energy</p>
                 <p class="text-sm font-medium text-surface-200">
-                  {formatNumber(energyKcal(workout.total_energy_kj))} kcal
+                  {formatEnergy(workout.total_energy_kj)}
                 </p>
               </div>
             {/if}

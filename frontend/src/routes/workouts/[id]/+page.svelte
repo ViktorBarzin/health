@@ -3,7 +3,7 @@
   import { api } from '$lib/api';
   import type { WorkoutDetail, MetricResponse, MetricDataPoint } from '$lib/types';
   import { WORKOUT_LABELS } from '$lib/utils/constants';
-  import { formatDate, formatDuration, formatDistance, formatNumber } from '$lib/utils/format';
+  import { formatDate, formatDuration, formatDistance, formatNumber, formatEnergy } from '$lib/utils/format';
   import TimeSeriesChart from '$lib/components/charts/TimeSeriesChart.svelte';
 
   let workoutId = $derived($page.params.id);
@@ -60,10 +60,6 @@
 
   function getIcon(type: string): string {
     return WORKOUT_ICONS[type] ?? '\u{1F3C6}';
-  }
-
-  function energyKcal(kj: number): number {
-    return Math.round(kj / 4.184);
   }
 
   function calculatePace(distanceM: number, durationSec: number): string {
@@ -208,7 +204,7 @@
       <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Energy</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">
-          {workout.total_energy_kj > 0 ? `${formatNumber(energyKcal(workout.total_energy_kj))} kcal` : '--'}
+          {workout.total_energy_kj > 0 ? formatEnergy(workout.total_energy_kj) : '--'}
         </p>
       </div>
       <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
