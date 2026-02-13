@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -41,6 +42,8 @@ from app.schemas.auth import (
     UserResponse,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -61,6 +64,7 @@ async def register_begin(
         user = User(email=body.email)
         db.add(user)
         await db.flush()
+        await db.commit()
         await db.refresh(user, attribute_names=["id", "credentials"])
 
     exclude_credentials = [
@@ -111,9 +115,10 @@ async def register_complete(
             expected_origin=settings.WEBAUTHN_ORIGIN,
         )
     except Exception as e:
+        logger.warning("Registration verification failed for %s: %s", body.email, e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Registration verification failed: {e}",
+            detail="Registration verification failed. Please try again.",
         )
 
     result = await db.execute(select(User).where(User.email == body.email))
@@ -136,6 +141,7 @@ async def register_complete(
     )
     db.add(credential)
     await db.flush()
+    await db.commit()
 
     token = create_session(user.id)
     set_session_cookie(response, token)
@@ -215,13 +221,27 @@ async def login_complete(
             credential_current_sign_count=stored_cred.sign_count,
         )
     except Exception as e:
+        logger.warning("Authentication verification failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication verification failed: {e}",
+            detail="Authentication failed.",
         )
 
+    # Validate sign count to detect cloned authenticators
+    # Skip check when both are 0 (some authenticators don't track sign count)
+    if not (verification.new_sign_count == 0 and stored_cred.sign_count == 0):
+        if verification.new_sign_count <= stored_cred.sign_count:
+            logger.warning(
+                "Sign count regression for credential %s: got %d, expected > %d",
+                stored_cred.id, verification.new_sign_count, stored_cred.sign_count,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication failed.",
+            )
     stored_cred.sign_count = verification.new_sign_count
     await db.flush()
+    await db.commit()
 
     token = create_session(user.id)
     set_session_cookie(response, token)
