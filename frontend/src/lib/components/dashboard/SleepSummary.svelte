@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DashboardSummary } from '$lib/types';
+  import { SLEEP_GOAL_HOURS, SLEEP_QUALITY_THRESHOLDS } from '$lib/utils/constants';
 
   interface Props {
     summary: DashboardSummary | null;
@@ -14,23 +15,23 @@
   let qualityLabel = $derived.by(() => {
     if (!summary || summary.sleep_hours_last_night == null) return '';
     const h = summary.sleep_hours_last_night;
-    if (h >= 8) return 'Excellent';
-    if (h >= 7) return 'Good';
-    if (h >= 6) return 'Fair';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.excellent) return 'Excellent';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.good) return 'Good';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.fair) return 'Fair';
     return 'Poor';
   });
 
   let qualityColor = $derived.by(() => {
     if (!summary || summary.sleep_hours_last_night == null) return 'text-surface-400';
     const h = summary.sleep_hours_last_night;
-    if (h >= 8) return 'text-green-400';
-    if (h >= 7) return 'text-blue-400';
-    if (h >= 6) return 'text-yellow-400';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.excellent) return 'text-green-400';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.good) return 'text-blue-400';
+    if (h >= SLEEP_QUALITY_THRESHOLDS.fair) return 'text-yellow-400';
     return 'text-red-400';
   });
 
   let barPercent = $derived(
-    summary?.sleep_hours_last_night != null ? Math.min((summary.sleep_hours_last_night / 9) * 100, 100) : 0
+    summary?.sleep_hours_last_night != null ? Math.min((summary.sleep_hours_last_night / (SLEEP_GOAL_HOURS + 1)) * 100, 100) : 0
   );
 </script>
 
@@ -71,7 +72,7 @@
     <!-- Quality indicator -->
     <div class="flex items-center justify-between">
       <span class="text-sm {qualityColor} font-medium">{qualityLabel}</span>
-      <span class="text-xs text-surface-500">Goal: 8h</span>
+      <span class="text-xs text-surface-500">Goal: {SLEEP_GOAL_HOURS}h</span>
     </div>
   {/if}
 </div>

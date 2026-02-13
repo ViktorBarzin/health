@@ -3,6 +3,7 @@
   import type { MetricResponse, MetricDataPoint } from '$lib/types';
   import { dateRange } from '$lib/stores/date-range.svelte';
   import { formatNumber } from '$lib/utils/format';
+  import { SLEEP_QUALITY_THRESHOLDS } from '$lib/utils/constants';
   import TimeSeriesChart from '$lib/components/charts/TimeSeriesChart.svelte';
   import BarChart from '$lib/components/charts/BarChart.svelte';
 
@@ -55,10 +56,10 @@
   let maxSleep = $derived(stats?.max ?? 0);
 
   let qualityCounts = $derived({
-    excellent: sleepData.filter((d) => d.value >= 8).length,
-    good: sleepData.filter((d) => d.value >= 7 && d.value < 8).length,
-    fair: sleepData.filter((d) => d.value >= 6 && d.value < 7).length,
-    poor: sleepData.filter((d) => d.value < 6).length,
+    excellent: sleepData.filter((d) => d.value >= SLEEP_QUALITY_THRESHOLDS.excellent).length,
+    good: sleepData.filter((d) => d.value >= SLEEP_QUALITY_THRESHOLDS.good && d.value < SLEEP_QUALITY_THRESHOLDS.excellent).length,
+    fair: sleepData.filter((d) => d.value >= SLEEP_QUALITY_THRESHOLDS.fair && d.value < SLEEP_QUALITY_THRESHOLDS.good).length,
+    poor: sleepData.filter((d) => d.value < SLEEP_QUALITY_THRESHOLDS.fair).length,
   });
 
   function formatHours(hours: number): string {
@@ -68,9 +69,9 @@
   }
 
   function sleepQuality(hours: number): { label: string; color: string } {
-    if (hours >= 8) return { label: 'Excellent', color: 'text-green-400' };
-    if (hours >= 7) return { label: 'Good', color: 'text-primary-400' };
-    if (hours >= 6) return { label: 'Fair', color: 'text-yellow-400' };
+    if (hours >= SLEEP_QUALITY_THRESHOLDS.excellent) return { label: 'Excellent', color: 'text-green-400' };
+    if (hours >= SLEEP_QUALITY_THRESHOLDS.good) return { label: 'Good', color: 'text-primary-400' };
+    if (hours >= SLEEP_QUALITY_THRESHOLDS.fair) return { label: 'Fair', color: 'text-yellow-400' };
     return { label: 'Poor', color: 'text-red-400' };
   }
 </script>

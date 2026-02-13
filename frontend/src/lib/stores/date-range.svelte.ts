@@ -1,6 +1,8 @@
 export type Resolution = 'raw' | 'day' | 'week' | 'month';
 export type Preset = '7d' | '30d' | '90d' | '1y' | 'all';
 
+import { EARLIEST_HEALTH_DATA } from '$lib/utils/constants';
+
 function createDateRangeStore() {
   const now = new Date();
   const thirtyDaysAgo = new Date(now);
@@ -43,7 +45,7 @@ function createDateRangeStore() {
         newStart.setFullYear(today.getFullYear() - 1);
         break;
       case 'all':
-        newStart = new Date(2015, 0, 1);
+        newStart = new Date(EARLIEST_HEALTH_DATA);
         break;
     }
 

@@ -125,6 +125,25 @@ export const METRIC_UNITS: Record<string, string> = {
   EnvironmentalAudioExposure: 'dBASPL',
 };
 
+/** Sleep goal and quality thresholds */
+export const SLEEP_GOAL_HOURS = 8;
+export const SLEEP_QUALITY_THRESHOLDS = {
+  excellent: 8,
+  good: 7,
+  fair: 6,
+} as const;
+
+/** BMI category definitions */
+export const BMI_CATEGORIES = [
+  { max: 18.5, label: 'Underweight', color: 'text-yellow-400' },
+  { max: 25, label: 'Normal', color: 'text-green-400' },
+  { max: 30, label: 'Overweight', color: 'text-yellow-400' },
+  { max: Infinity, label: 'Obese', color: 'text-red-400' },
+] as const;
+
+/** Earliest possible date for Apple Health data (iOS 8 launch, Sept 2014) */
+export const EARLIEST_HEALTH_DATA = new Date(2014, 8, 1);
+
 /** Human-readable labels for workout activity types */
 export const WORKOUT_LABELS: Record<string, string> = {
   Running: 'Running',

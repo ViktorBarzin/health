@@ -3,6 +3,7 @@
   import type { MetricResponse, MetricDataPoint } from '$lib/types';
   import { dateRange } from '$lib/stores/date-range.svelte';
   import { formatNumber, formatMetricValue } from '$lib/utils/format';
+  import { BMI_CATEGORIES } from '$lib/utils/constants';
   import TimeSeriesChart from '$lib/components/charts/TimeSeriesChart.svelte';
 
   let weightData = $state<MetricDataPoint[]>([]);
@@ -91,10 +92,8 @@
   });
 
   function bmiCategory(bmi: number): { label: string; color: string } {
-    if (bmi < 18.5) return { label: 'Underweight', color: 'text-yellow-400' };
-    if (bmi < 25) return { label: 'Normal', color: 'text-green-400' };
-    if (bmi < 30) return { label: 'Overweight', color: 'text-yellow-400' };
-    return { label: 'Obese', color: 'text-red-400' };
+    const cat = BMI_CATEGORIES.find((c) => bmi < c.max);
+    return cat ? { label: cat.label, color: cat.color } : { label: 'Obese', color: 'text-red-400' };
   }
 </script>
 
