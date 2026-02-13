@@ -117,7 +117,7 @@
     </div>
   {:else}
     <!-- Hero: Last Night's Sleep -->
-    <div class="bg-surface-800 rounded-xl border border-surface-700 p-8">
+    <div class="bg-surface-800 rounded-xl border border-surface-700 p-8" data-testid="sleep-last-night">
       <div class="flex flex-col items-center">
         <p class="text-sm text-surface-500 uppercase tracking-wider mb-2">Last Night</p>
         {#if lastNightSleep}
@@ -132,15 +132,15 @@
 
     <!-- Sleep stats -->
     <div class="grid grid-cols-3 gap-4">
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center" data-testid="sleep-stat-avg">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Average</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">{formatHours(avgSleep)}</p>
       </div>
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center" data-testid="sleep-stat-min">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Shortest</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">{formatHours(minSleep)}</p>
       </div>
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4 text-center" data-testid="sleep-stat-max">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Longest</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">{formatHours(maxSleep)}</p>
       </div>
@@ -185,7 +185,7 @@
     {#if weeklyData.length > 0}
       <div>
         <h3 class="text-sm font-semibold text-surface-300 mb-3">This Week</h3>
-        <div style="height: 250px;">
+        <div style="height: 250px;" data-testid="sleep-weekly-chart">
           <BarChart
             data={weeklyData}
             label="Sleep (hours)"

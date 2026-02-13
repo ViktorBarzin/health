@@ -33,6 +33,7 @@
         class="lg:hidden p-1.5 rounded-lg text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
         onclick={onToggleSidebar}
         aria-label="Toggle sidebar"
+        data-testid="header-menu-toggle"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -51,6 +52,7 @@
       <button
         class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
         onclick={toggleUserMenu}
+        data-testid="header-user-menu-btn"
       >
         <div class="w-7 h-7 rounded-full bg-primary-500/20 flex items-center justify-center">
           <span class="text-xs font-medium text-primary-400">
@@ -80,6 +82,7 @@
           <button
             class="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-surface-700 transition-colors"
             onclick={handleLogout}
+            data-testid="header-logout-btn"
           >
             Log out
           </button>

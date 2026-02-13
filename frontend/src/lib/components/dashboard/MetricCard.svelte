@@ -50,7 +50,7 @@
   );
 </script>
 
-<div class="rounded-xl bg-surface-800 p-4 flex flex-col gap-3 border border-surface-700/50 hover:border-surface-600/50 transition-colors">
+<div class="rounded-xl bg-surface-800 p-4 flex flex-col gap-3 border border-surface-700/50 hover:border-surface-600/50 transition-colors" data-testid="metric-card-{title}">
   <!-- Header row: icon + title -->
   <div class="flex items-center gap-2">
     <div
@@ -66,7 +66,7 @@
 
   <!-- Value row -->
   <div class="flex items-baseline gap-1.5">
-    <span class="text-2xl font-bold text-surface-100">{formattedValue}</span>
+    <span class="text-2xl font-bold text-surface-100" data-testid="metric-value-{title}">{formattedValue}</span>
     <span class="text-sm text-surface-500">{unit}</span>
 
     {#if trend !== null && trend !== undefined}

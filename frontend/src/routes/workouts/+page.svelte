@@ -89,6 +89,7 @@
     <div class="relative">
       <select
         bind:value={selectedType}
+        data-testid="workouts-filter-type"
         class="appearance-none bg-surface-800 border border-surface-700 rounded-lg px-4 py-2.5 pr-8
                text-sm text-surface-200 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
                transition-colors cursor-pointer"
@@ -152,6 +153,7 @@
       {#each workouts as workout}
         <a
           href="/workouts/{workout.id}"
+          data-testid="workout-row-{workout.id}"
           class="group flex items-center gap-4 bg-surface-800 rounded-xl border border-surface-700 p-4
                  hover:border-surface-600 hover:bg-surface-800/80 transition-all"
         >
@@ -214,6 +216,7 @@
                  disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={loadingMore}
           onclick={() => loadWorkouts(false)}
+          data-testid="workouts-load-more-btn"
         >
           {#if loadingMore}
             <span class="flex items-center gap-2">

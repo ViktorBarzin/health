@@ -89,6 +89,7 @@
       type="text"
       bind:value={search}
       placeholder="Search metrics..."
+      data-testid="metrics-search-input"
       class="w-full pl-10 pr-4 py-2.5 bg-surface-800 border border-surface-700 rounded-lg
              text-surface-100 placeholder-surface-500 text-sm
              focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
@@ -140,6 +141,7 @@
           {#each categoryMetrics as metric}
             <a
               href="/metrics/{metric.metric_type}"
+              data-testid="metric-link-{metric.metric_type}"
               class="group bg-surface-800 rounded-xl border border-surface-700 p-5
                      hover:border-surface-600 hover:bg-surface-800/80 transition-all"
             >

@@ -42,7 +42,7 @@
     <!-- Register form -->
     <div class="bg-surface-900 rounded-xl border border-surface-700 p-6">
       {#if error}
-        <div class="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+        <div class="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20" data-testid="register-error">
           <p class="text-sm text-red-400">{error}</p>
         </div>
       {/if}
@@ -58,6 +58,7 @@
             bind:value={email}
             required
             placeholder="you@example.com"
+            data-testid="register-email-input"
             class="w-full px-3 py-2.5 bg-surface-800 border border-surface-700 rounded-lg
                    text-surface-100 placeholder-surface-500 text-sm
                    focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
@@ -68,6 +69,7 @@
         <button
           type="submit"
           disabled={loading}
+          data-testid="register-submit-btn"
           class="w-full py-2.5 px-4 bg-primary-500 hover:bg-primary-600 disabled:opacity-50
                  disabled:cursor-not-allowed text-white font-medium text-sm rounded-lg
                  transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2

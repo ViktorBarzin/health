@@ -66,7 +66,7 @@
   }
 </script>
 
-<div class="rounded-xl bg-surface-800 border border-surface-700/50 overflow-hidden">
+<div class="rounded-xl bg-surface-800 border border-surface-700/50 overflow-hidden" data-testid="recent-workouts">
   <div class="px-4 py-3 border-b border-surface-700/50">
     <h3 class="text-sm font-semibold text-surface-200">Recent Workouts</h3>
   </div>
@@ -103,10 +103,11 @@
     </div>
   {:else}
     <div class="divide-y divide-surface-700/50">
-      {#each workouts as workout}
+      {#each workouts as workout, i}
         <a
           href="/workouts/{workout.id}"
           class="px-4 py-3 flex items-center gap-3 hover:bg-surface-700/50 transition-colors"
+          data-testid="recent-workout-{i}"
         >
           <div class="w-9 h-9 rounded-lg bg-[var(--color-workout)]/15 flex items-center justify-center flex-shrink-0">
             <svg class="w-4.5 h-4.5 text-[var(--color-workout)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -139,7 +140,7 @@
     </div>
 
     <div class="px-4 py-2.5 border-t border-surface-700/50">
-      <a href="/workouts" class="text-xs text-primary-400 hover:text-primary-300 font-medium">
+      <a href="/workouts" class="text-xs text-primary-400 hover:text-primary-300 font-medium" data-testid="recent-workouts-view-all">
         View all workouts
       </a>
     </div>

@@ -153,6 +153,7 @@
         <select
           id="metric1"
           bind:value={metric1Type}
+          data-testid="trends-metric1-select"
           class="w-full appearance-none bg-surface-700 border border-surface-600 rounded-lg px-3 py-2.5
                  text-sm text-surface-200 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
                  transition-colors cursor-pointer"
@@ -177,6 +178,7 @@
         <select
           id="metric2"
           bind:value={metric2Type}
+          data-testid="trends-metric2-select"
           class="w-full appearance-none bg-surface-700 border border-surface-600 rounded-lg px-3 py-2.5
                  text-sm text-surface-200 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500
                  transition-colors cursor-pointer"
@@ -244,7 +246,7 @@
     {#if alignedData.xValues.length > 2}
       <div>
         <h3 class="text-sm font-semibold text-surface-300 mb-3">Correlation</h3>
-        <div style="height: 300px;">
+        <div style="height: 300px;" data-testid="trends-scatter-chart">
           <ScatterPlot
             xValues={alignedData.xValues}
             yValues={alignedData.yValues}

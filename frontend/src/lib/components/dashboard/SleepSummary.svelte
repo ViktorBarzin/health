@@ -35,7 +35,7 @@
   );
 </script>
 
-<div class="rounded-xl bg-surface-800 border border-surface-700/50 p-4">
+<div class="rounded-xl bg-surface-800 border border-surface-700/50 p-4" data-testid="sleep-summary">
   <div class="flex items-center gap-2 mb-4">
     <div class="w-8 h-8 rounded-lg bg-[var(--color-sleep)]/15 flex items-center justify-center">
       <svg class="w-4 h-4 text-[var(--color-sleep)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -54,7 +54,7 @@
     </div>
   {:else if summary}
     <!-- Hours slept -->
-    <div class="flex items-baseline gap-1 mb-3">
+    <div class="flex items-baseline gap-1 mb-3" data-testid="sleep-summary-hours">
       <span class="text-3xl font-bold text-surface-100">{hours}</span>
       <span class="text-lg text-surface-400">h</span>
       <span class="text-3xl font-bold text-surface-100 ml-1">{minutes}</span>
@@ -71,7 +71,7 @@
 
     <!-- Quality indicator -->
     <div class="flex items-center justify-between">
-      <span class="text-sm {qualityColor} font-medium">{qualityLabel}</span>
+      <span class="text-sm {qualityColor} font-medium" data-testid="sleep-summary-quality">{qualityLabel}</span>
       <span class="text-xs text-surface-500">Goal: {SLEEP_GOAL_HOURS}h</span>
     </div>
   {/if}

@@ -75,6 +75,7 @@
   ondrop={handleDrop}
   role="button"
   tabindex="0"
+  data-testid="upload-dropzone"
 >
   {#if uploading}
     <div class="flex flex-col items-center gap-3">
@@ -96,15 +97,16 @@
       </div>
       <label
         class="mt-2 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-lg cursor-pointer transition-colors"
+        data-testid="upload-browse-btn"
       >
         Browse Files
-        <input type="file" accept=".xml,.zip" class="hidden" onchange={handleFileSelect} />
+        <input type="file" accept=".xml,.zip" class="hidden" onchange={handleFileSelect} data-testid="upload-file-input" />
       </label>
     </div>
   {/if}
 
   {#if error}
-    <div class="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+    <div class="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20" data-testid="upload-error">
       <p class="text-sm text-red-400">{error}</p>
     </div>
   {/if}

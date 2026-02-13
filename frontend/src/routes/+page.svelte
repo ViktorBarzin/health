@@ -108,7 +108,7 @@
 
 <div class="space-y-6">
   {#if error && !loading}
-    <div class="rounded-xl bg-red-900/20 border border-red-700/50 p-4">
+    <div class="rounded-xl bg-red-900/20 border border-red-700/50 p-4" data-testid="dashboard-error">
       <p class="text-red-400 text-sm">{error}</p>
     </div>
   {/if}
@@ -116,7 +116,7 @@
   <!-- Top row: Activity Rings + Today Summary -->
   <div class="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-6">
     <!-- Activity Rings -->
-    <div class="rounded-xl bg-surface-800 border border-surface-700/50 p-6 flex items-center justify-center">
+    <div class="rounded-xl bg-surface-800 border border-surface-700/50 p-6 flex items-center justify-center" data-testid="dashboard-activity-rings">
       {#if loading}
         <div class="animate-pulse w-[140px] h-[140px] rounded-full bg-surface-700"></div>
       {:else if rings}

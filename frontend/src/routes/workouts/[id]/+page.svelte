@@ -139,6 +139,7 @@
   <a
     href="/workouts"
     class="inline-flex items-center gap-2 text-sm text-surface-400 hover:text-surface-200 transition-colors"
+    data-testid="workout-detail-back-link"
   >
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
       <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
@@ -195,25 +196,25 @@
 
     <!-- Stats row -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="workout-stat-distance">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Distance</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">
           {workout.total_distance_m > 0 ? formatDistance(workout.total_distance_m) : '--'}
         </p>
       </div>
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="workout-stat-energy">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Energy</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">
           {workout.total_energy_kj > 0 ? formatEnergy(workout.total_energy_kj) : '--'}
         </p>
       </div>
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="workout-stat-pace">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Avg Pace</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">
           {calculatePace(workout.total_distance_m, workout.duration_sec)}
         </p>
       </div>
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="workout-stat-duration">
         <p class="text-xs text-surface-500 uppercase tracking-wider">Duration</p>
         <p class="text-lg font-semibold text-surface-100 mt-1">
           {formatDuration(workout.duration_sec)}
@@ -225,7 +226,7 @@
     {#if workout.route_points && workout.route_points.length > 0}
       <div>
         <h3 class="text-sm font-semibold text-surface-300 mb-3">Route</h3>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 overflow-hidden">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 overflow-hidden" data-testid="workout-detail-map">
           <div bind:this={mapContainer} class="h-[400px] w-full"></div>
         </div>
       </div>

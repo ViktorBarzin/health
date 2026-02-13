@@ -77,6 +77,7 @@
       <a
         href="/metrics"
         class="p-1.5 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors"
+        data-testid="metric-detail-back-btn"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
@@ -143,7 +144,7 @@
     </div>
   {:else}
     <!-- Time series chart -->
-    <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" style="height: 350px;">
+    <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" style="height: 350px;" data-testid="metric-detail-chart">
       <TimeSeriesChart
         {data}
         label={metricLabel}
@@ -155,31 +156,31 @@
     <!-- Stats panel -->
     {#if stats}
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="metric-stat-avg">
           <p class="text-xs text-surface-500 uppercase tracking-wider">Average</p>
           <p class="text-lg font-semibold text-surface-100 mt-1">
             {formatMetricValue(stats.avg, metricUnit)}
           </p>
         </div>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="metric-stat-min">
           <p class="text-xs text-surface-500 uppercase tracking-wider">Min</p>
           <p class="text-lg font-semibold text-surface-100 mt-1">
             {formatMetricValue(stats.min, metricUnit)}
           </p>
         </div>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="metric-stat-max">
           <p class="text-xs text-surface-500 uppercase tracking-wider">Max</p>
           <p class="text-lg font-semibold text-surface-100 mt-1">
             {formatMetricValue(stats.max, metricUnit)}
           </p>
         </div>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="metric-stat-count">
           <p class="text-xs text-surface-500 uppercase tracking-wider">Count</p>
           <p class="text-lg font-semibold text-surface-100 mt-1">
             {formatNumber(stats.count)}
           </p>
         </div>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" data-testid="metric-stat-trend">
           <p class="text-xs text-surface-500 uppercase tracking-wider">Trend</p>
           <div class="flex items-center gap-1 mt-1">
             {#if stats.trend_pct !== undefined && stats.trend_pct !== null}

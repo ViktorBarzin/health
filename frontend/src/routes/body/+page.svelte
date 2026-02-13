@@ -128,7 +128,7 @@
     <!-- Hero metrics -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
       <!-- Weight -->
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-6 text-center">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-6 text-center" data-testid="body-current-weight">
         <p class="text-xs text-surface-500 uppercase tracking-wider mb-2">Current Weight</p>
         {#if currentWeight}
           <p class="text-3xl font-bold text-surface-100">
@@ -165,7 +165,7 @@
       </div>
 
       <!-- BMI -->
-      <div class="bg-surface-800 rounded-xl border border-surface-700 p-6 text-center">
+      <div class="bg-surface-800 rounded-xl border border-surface-700 p-6 text-center" data-testid="body-current-bmi">
         <p class="text-xs text-surface-500 uppercase tracking-wider mb-2">BMI</p>
         {#if currentBmi}
           <p class="text-3xl font-bold text-surface-100">
@@ -184,7 +184,7 @@
     {#if weightData.length > 0}
       <div>
         <h3 class="text-sm font-semibold text-surface-300 mb-3">Weight Trend</h3>
-        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" style="height: 350px;">
+        <div class="bg-surface-800 rounded-xl border border-surface-700 p-4" style="height: 350px;" data-testid="body-weight-chart">
           <TimeSeriesChart
             data={weightData}
             label="Weight"

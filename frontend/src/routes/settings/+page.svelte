@@ -41,7 +41,7 @@
 
 <div class="max-w-3xl mx-auto space-y-8">
   <!-- Data Import Section -->
-  <section>
+  <section data-testid="settings-import-section">
     <div class="mb-4">
       <h2 class="text-lg font-semibold text-surface-100">Data Import</h2>
       <p class="text-sm text-surface-500 mt-1">Upload your Apple Health export to import health data.</p>
@@ -115,6 +115,7 @@
         <button
           onclick={handleLogout}
           disabled={loggingOut}
+          data-testid="settings-logout-btn"
           class="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30
                  text-red-400 text-sm font-medium rounded-lg transition-colors
                  disabled:opacity-50 disabled:cursor-not-allowed"

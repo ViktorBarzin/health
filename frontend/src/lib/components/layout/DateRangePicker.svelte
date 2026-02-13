@@ -37,6 +37,7 @@
                  ? 'bg-primary-500 text-white'
                  : 'text-surface-400 hover:text-surface-200'}"
         onclick={() => dateRange.setPreset(preset.value)}
+        data-testid="daterange-preset-{preset.value}"
       >
         {preset.label}
       </button>
@@ -49,6 +50,7 @@
       type="date"
       value={dateRange.startISO}
       onchange={handleStartChange}
+      data-testid="daterange-start-input"
       class="bg-surface-800 text-surface-300 text-xs rounded-md border border-surface-700
              px-2 py-1 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
     />
@@ -57,6 +59,7 @@
       type="date"
       value={dateRange.endISO}
       onchange={handleEndChange}
+      data-testid="daterange-end-input"
       class="bg-surface-800 text-surface-300 text-xs rounded-md border border-surface-700
              px-2 py-1 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
     />
