@@ -32,6 +32,7 @@ from app.core.auth import (
     store_challenge,
 )
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import check_rate_limit
 from app.database import get_db
 from app.models.user import User
 from app.models.user_credential import UserCredential
@@ -50,6 +51,7 @@ router = APIRouter()
 @router.post("/register/begin")
 async def register_begin(
     body: EmailRequest,
+    _rate_limit: None = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Begin passkey registration: generate WebAuthn options."""
@@ -97,6 +99,7 @@ async def register_begin(
 async def register_complete(
     body: RegisterCompleteRequest,
     response: Response,
+    _rate_limit: None = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """Complete passkey registration: verify and store credential."""
@@ -150,7 +153,9 @@ async def register_complete(
 
 
 @router.post("/login/begin")
-async def login_begin() -> dict:
+async def login_begin(
+    _rate_limit: None = Depends(check_rate_limit),
+) -> dict:
     """Begin passkey authentication with discoverable credentials (no email needed)."""
     options = generate_authentication_options(
         rp_id=settings.WEBAUTHN_RP_ID,
@@ -170,6 +175,7 @@ async def login_begin() -> dict:
 async def login_complete(
     body: LoginCompleteRequest,
     response: Response,
+    _rate_limit: None = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """Complete passkey authentication: verify assertion using discoverable credential."""
