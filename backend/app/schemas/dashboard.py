@@ -23,5 +23,8 @@ class ImportStatusResponse(BaseModel):
     record_count: int
     filename: str
     imported_at: datetime
+    error_count: int = 0
+    skipped_count: int = 0
+    error_messages: str | None = None
 
     model_config = {"from_attributes": True}

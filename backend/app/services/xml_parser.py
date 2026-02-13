@@ -476,6 +476,7 @@ async def _producer(
     num_consumers: int,
     cancelled: list[bool],
     source_cache: _DataSourceCache,
+    skipped: list[int],
 ) -> int:
     """Parse the XML file and enqueue batches for consumers.
 
@@ -488,7 +489,6 @@ async def _producer(
     workout_count = 0
     route_point_count = 0
     activity_count = 0
-    skipped_workouts = 0
 
     # Use recover=True to tolerate malformed XML (Apple Health exports
     # sometimes contain unescaped characters in attribute values).
@@ -529,6 +529,8 @@ async def _producer(
                     batch.category.append(data)
                     category_count += 1
                 total_count += 1
+            else:
+                skipped[0] += 1
 
         elif tag == "Workout":
             workout, route_points = _process_workout_element(
@@ -539,7 +541,7 @@ async def _producer(
                     "Skipping workout with unparseable startDate: %s",
                     elem.get("startDate"),
                 )
-                skipped_workouts += 1
+                skipped[0] += 1
             else:
                 batch.workouts.append(workout)
                 batch.route_points.extend(route_points)
@@ -553,6 +555,8 @@ async def _producer(
                 batch.activity.append(summary)
                 activity_count += 1
                 total_count += 1
+            else:
+                skipped[0] += 1
 
         # -- Yield to event loop periodically so consumers can work ----------
         if total_count > 0 and total_count % 2000 == 0:
@@ -583,9 +587,9 @@ async def _producer(
 
     logger.info(
         "Parsing complete: %d health, %d category, %d workouts (%d route pts), "
-        "%d activity summaries, %d total (%d workouts skipped)",
+        "%d activity summaries, %d total (%d skipped)",
         health_count, category_count, workout_count, route_point_count,
-        activity_count, total_count, skipped_workouts,
+        activity_count, total_count, skipped[0],
     )
 
     return total_count
@@ -596,6 +600,8 @@ async def _consumer(
     db_session_factory: async_sessionmaker,
     queue: asyncio.Queue[BatchPayload | None],
     progress: list[int],
+    errors: list[int],
+    error_details: list[str],
 ) -> None:
     """Pull batches from the queue and flush them to the DB."""
     while True:
@@ -604,8 +610,11 @@ async def _consumer(
             queue.task_done()
             return
         try:
-            await _flush_batch(db_session_factory, batch)
-            progress[0] += len(batch)
+            failed, batch_errors = await _flush_batch(db_session_factory, batch)
+            progress[0] += len(batch) - failed
+            if failed > 0:
+                errors[0] += failed
+                error_details.extend(batch_errors)
         except Exception:
             logger.exception(
                 "Consumer %d: batch failed (%d health, %d category, "
@@ -615,6 +624,11 @@ async def _consumer(
                 len(batch.workouts), len(batch.route_points),
                 len(batch.activity),
             )
+            errors[0] += len(batch)
+            error_details.append(
+                f"Consumer {consumer_id}: entire batch failed "
+                f"({len(batch)} records)"
+            )
         finally:
             queue.task_done()
 
@@ -622,10 +636,15 @@ async def _consumer(
 async def _flush_batch(
     db_session_factory: async_sessionmaker,
     batch: BatchPayload,
-) -> None:
+) -> tuple[int, list[str]]:
     """Persist one batch, isolating each table insert so individual failures
     don't prevent other record types from being saved.
+
+    Returns a tuple of (failed_record_count, error_messages).
     """
+    failed = 0
+    errors: list[str] = []
+
     for label, insert_fn, rows in [
         ("health_records", bulk_insert_health_records, batch.health),
         ("category_records", bulk_insert_category_records, batch.category),
@@ -636,6 +655,8 @@ async def _flush_batch(
                 await _insert_table(db_session_factory, insert_fn, rows)
             except Exception:
                 logger.exception("Failed to insert %d %s", len(rows), label)
+                failed += len(rows)
+                errors.append(f"Failed to insert {len(rows)} {label}")
 
     # Workouts + route points (FK dependency) handled together
     if batch.workouts:
@@ -646,6 +667,11 @@ async def _flush_batch(
                 "Failed to insert %d workouts (%d route points)",
                 len(batch.workouts), len(batch.route_points),
             )
+            failed += len(batch.workouts) + len(batch.route_points)
+            errors.append(
+                f"Failed to insert {len(batch.workouts)} workouts "
+                f"({len(batch.route_points)} route points)"
+            )
 
     logger.debug(
         "Flushed batch: %d health, %d category, %d workouts, %d route pts, %d activity",
@@ -653,6 +679,8 @@ async def _flush_batch(
         len(batch.workouts), len(batch.route_points),
         len(batch.activity),
     )
+
+    return failed, errors
 
 
 async def _insert_table(db_session_factory: async_sessionmaker, insert_fn, rows: list[dict[str, Any]]) -> None:
@@ -758,6 +786,9 @@ async def parse_health_export(
     total_count = 0
     progress: list[int] = [0]
     cancelled: list[bool] = [False]
+    errors: list[int] = [0]
+    error_details: list[str] = []
+    skipped: list[int] = [0]
     reporter_task: asyncio.Task | None = None
 
     try:
@@ -769,7 +800,7 @@ async def parse_health_export(
         # Start consumer tasks
         consumer_tasks = [
             asyncio.create_task(
-                _consumer(i, db_session_factory, queue, progress),
+                _consumer(i, db_session_factory, queue, progress, errors, error_details),
                 name=f"db-consumer-{i}",
             )
             for i in range(NUM_CONSUMERS)
@@ -778,7 +809,7 @@ async def parse_health_export(
         producer_task = asyncio.create_task(
             _producer(
                 file_path, user_id, batch_id, db_session_factory,
-                queue, NUM_CONSUMERS, cancelled, source_cache,
+                queue, NUM_CONSUMERS, cancelled, source_cache, skipped,
             ),
             name="xml-producer",
         )
@@ -828,12 +859,28 @@ async def parse_health_export(
             pass
 
         # Mark import as complete or cancelled
-        final_status = "cancelled" if cancelled[0] else "completed"
+        if cancelled[0]:
+            final_status = "cancelled"
+        elif errors[0] > 0:
+            final_status = "completed_with_errors"
+        else:
+            final_status = "completed"
+
+        error_messages_str: str | None = None
+        if error_details:
+            error_messages_str = "\n".join(error_details)[:10_000]
+
         async with db_session_factory() as session:
             await session.execute(
                 update(ImportBatch)
                 .where(ImportBatch.id == batch_id)
-                .values(record_count=total_count, status=final_status)
+                .values(
+                    record_count=total_count,
+                    status=final_status,
+                    error_count=errors[0],
+                    skipped_count=skipped[0],
+                    error_messages=error_messages_str,
+                )
             )
             await session.commit()
 

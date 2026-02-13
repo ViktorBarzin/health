@@ -206,6 +206,9 @@ async def list_uploads(
             record_count=b.record_count,
             filename=b.filename,
             imported_at=b.imported_at,
+            error_count=b.error_count,
+            skipped_count=b.skipped_count,
+            error_messages=b.error_messages,
         )
         for b in batches
     ]
@@ -236,6 +239,9 @@ async def get_upload_status(
         record_count=batch.record_count,
         filename=batch.filename,
         imported_at=batch.imported_at,
+        error_count=batch.error_count,
+        skipped_count=batch.skipped_count,
+        error_messages=batch.error_messages,
     )
 
 
@@ -405,7 +411,7 @@ async def reprocess_import_batch(
     await db.execute(
         update(ImportBatch)
         .where(ImportBatch.id == batch_id)
-        .values(status="processing", record_count=0)
+        .values(status="processing", record_count=0, error_count=0, skipped_count=0, error_messages=None)
     )
     await db.commit()
 

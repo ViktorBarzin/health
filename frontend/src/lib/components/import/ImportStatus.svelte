@@ -43,7 +43,7 @@
     try {
       currentStatus = await api.get<ImportStatus>(`/api/import/upload/status/${id}`);
       onRefresh?.();
-      if (currentStatus.status === 'completed' || currentStatus.status === 'failed' || currentStatus.status === 'cancelled') {
+      if (currentStatus.status === 'completed' || currentStatus.status === 'completed_with_errors' || currentStatus.status === 'failed' || currentStatus.status === 'cancelled') {
         polling = false;
         if (pollTimer) {
           clearInterval(pollTimer);
@@ -83,6 +83,7 @@
   function statusColor(status: string): string {
     switch (status) {
       case 'completed': return 'text-green-400';
+      case 'completed_with_errors': return 'text-amber-400';
       case 'processing': return 'text-yellow-400';
       case 'cancelling': return 'text-orange-400';
       case 'cancelled': return 'text-orange-400';
@@ -95,6 +96,7 @@
   function statusBg(status: string): string {
     switch (status) {
       case 'completed': return 'bg-green-500/10 border-green-500/20';
+      case 'completed_with_errors': return 'bg-amber-500/10 border-amber-500/20';
       case 'processing': return 'bg-yellow-500/10 border-yellow-500/20';
       case 'cancelling': return 'bg-orange-500/10 border-orange-500/20';
       case 'cancelled': return 'bg-orange-500/10 border-orange-500/20';
@@ -116,6 +118,10 @@
           <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
+        {:else if currentStatus.status === 'completed_with_errors'}
+          <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
         {:else if currentStatus.status === 'failed'}
           <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
@@ -127,7 +133,7 @@
         {/if}
         <div>
           <p class="text-sm font-medium text-surface-200">{currentStatus.filename}</p>
-          <p class="text-xs {statusColor(currentStatus.status)} capitalize">{currentStatus.status}</p>
+          <p class="text-xs {statusColor(currentStatus.status)} capitalize">{currentStatus.status.replace('_', ' ')}</p>
         </div>
       </div>
       <div class="flex items-center gap-3">
@@ -135,6 +141,12 @@
           <p class="text-sm font-medium text-surface-200">
             {currentStatus.record_count.toLocaleString()} records{#if currentStatus.status === 'processing' || currentStatus.status === 'cancelling'} processed{/if}
           </p>
+          {#if currentStatus.error_count > 0}
+            <p class="text-xs text-red-400">{currentStatus.error_count.toLocaleString()} failed</p>
+          {/if}
+          {#if currentStatus.skipped_count > 0}
+            <p class="text-xs text-amber-400">{currentStatus.skipped_count.toLocaleString()} skipped</p>
+          {/if}
         </div>
         {#if currentStatus.status === 'processing'}
           <button
@@ -164,7 +176,7 @@
     {#each imports as imp}
       <div class="flex items-center justify-between p-3 rounded-lg bg-surface-800/50 border border-surface-700">
         <div class="flex items-center gap-3">
-          <div class="w-2 h-2 rounded-full {imp.status === 'completed' ? 'bg-green-400' : imp.status === 'failed' ? 'bg-red-400' : imp.status === 'cancelled' || imp.status === 'cancelling' ? 'bg-orange-400' : 'bg-yellow-400'}"></div>
+          <div class="w-2 h-2 rounded-full {imp.status === 'completed' ? 'bg-green-400' : imp.status === 'completed_with_errors' ? 'bg-amber-400' : imp.status === 'failed' ? 'bg-red-400' : imp.status === 'cancelled' || imp.status === 'cancelling' ? 'bg-orange-400' : 'bg-yellow-400'}"></div>
           <div>
             <p class="text-sm text-surface-200">{imp.filename}</p>
             <p class="text-xs text-surface-500">{formatDate(imp.imported_at)}</p>
@@ -173,7 +185,13 @@
         <div class="flex items-center gap-3">
           <div class="text-right">
             <p class="text-sm text-surface-300">{imp.record_count.toLocaleString()} records</p>
-            <p class="text-xs {statusColor(imp.status)} capitalize">{imp.status}</p>
+            {#if imp.error_count > 0}
+              <p class="text-xs text-red-400">{imp.error_count.toLocaleString()} failed</p>
+            {/if}
+            {#if imp.skipped_count > 0}
+              <p class="text-xs text-amber-400">{imp.skipped_count.toLocaleString()} skipped</p>
+            {/if}
+            <p class="text-xs {statusColor(imp.status)} capitalize">{imp.status.replace('_', ' ')}</p>
           </div>
           {#if imp.status !== 'processing' && imp.status !== 'cancelling'}
             {#if confirmDeleteId === imp.batch_id}

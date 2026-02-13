@@ -71,6 +71,9 @@ export interface ImportStatus {
   record_count: number;
   filename: string;
   imported_at: string;
+  error_count: number;
+  skipped_count: number;
+  error_messages: string | null;
 }
 
 export interface ActivityRingData {
