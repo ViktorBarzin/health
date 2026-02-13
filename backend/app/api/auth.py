@@ -273,3 +273,32 @@ async def me(
 ) -> UserResponse:
     """Return the currently authenticated user."""
     return UserResponse.model_validate(user)
+
+
+@router.post("/test-login", response_model=UserResponse)
+async def test_login(
+    body: EmailRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """Login as any user without WebAuthn. Only available when TEST_MODE=true."""
+    if not settings.TEST_MODE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found",
+        )
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(email=body.email)
+        db.add(user)
+        await db.flush()
+        await db.commit()
+        await db.refresh(user, attribute_names=["id"])
+
+    token = create_session(user.id)
+    set_session_cookie(response, token)
+
+    return UserResponse.model_validate(user)

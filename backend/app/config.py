@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     WEBAUTHN_ORIGIN: str = "http://localhost:3000"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:8080"]
     COOKIE_SECURE: bool = False
+    TEST_MODE: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
