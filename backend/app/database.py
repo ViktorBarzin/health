@@ -24,10 +24,15 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency that provides an async DB session.
+
+    Callers are responsible for calling ``await session.commit()`` when they
+    need to persist changes.  The session is rolled back on unhandled
+    exceptions and always closed at the end.
+    """
     async with async_session() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise
