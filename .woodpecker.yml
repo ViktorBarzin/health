@@ -2,6 +2,13 @@ when:
   - event: push
     branch: main
 
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      attempts: 5
+      backoff: 10sec
+
 steps:
   - name: build-and-push
     image: woodpeckerci/plugin-docker-buildx
