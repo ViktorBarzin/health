@@ -1,0 +1,22 @@
+when:
+  - event: push
+    branch: main
+
+steps:
+  - name: build-and-push
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: viktorbarzin/health
+      dockerfile: Dockerfile
+      username:
+        from_secret: docker_username
+      password:
+        from_secret: docker_password
+      tags:
+        - latest
+        - ${CI_PIPELINE_NUMBER}
+
+  - name: deploy
+    image: curlimages/curl
+    commands:
+      - 'curl -s -X PATCH "https://10.0.20.100:6443/apis/apps/v1/namespaces/health/deployments/health" -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" -k -d ''[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"viktorbarzin/health:''"$CI_PIPELINE_NUMBER"''"}]'' | head'
