@@ -7,7 +7,7 @@ clone:
     image: woodpeckerci/plugin-git
     settings:
       attempts: 5
-      backoff: 10sec
+      backoff: 10s
 
 steps:
   - name: build-and-push
