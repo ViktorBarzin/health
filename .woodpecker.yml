@@ -2,8 +2,10 @@ when:
   - event: push
     branch: main
 
-clone:
-  git:
+skip_clone: true
+
+steps:
+  - name: clone
     image: alpine
     environment:
       GITHUB_TOKEN:
@@ -13,7 +15,6 @@ clone:
       - 'for i in 1 2 3 4 5; do git clone https://x-access-token:${GITHUB_TOKEN}@github.com/${CI_REPO} . && break || echo "Clone attempt $i failed, retrying in 10s..." && rm -rf .git && sleep 10; done'
       - "git checkout $CI_COMMIT_SHA"
 
-steps:
   - name: build-and-push
     image: woodpeckerci/plugin-docker-buildx
     settings:
