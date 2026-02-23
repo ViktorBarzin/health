@@ -135,11 +135,9 @@ Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
 ## CI/CD
 
-Drone CI (`.drone.yml`):
-1. `plugins/docker` builds and pushes to `viktorbarzin/health:latest` + `:${DRONE_BUILD_NUMBER}`
-2. `curl` patches the k8s deployment annotation at `https://10.0.20.100:6443`
-
-Pipeline type: `kubernetes` (NOT `docker` — Drone runs on k8s)
+Woodpecker CI (`.woodpecker/default.yml`):
+1. `plugins/docker` builds and pushes to `viktorbarzin/health:latest` + `:${CI_PIPELINE_NUMBER}`
+2. `curl` patches the k8s deployment annotation at `https://kubernetes:6443`
 
 ## Environment Variables
 
