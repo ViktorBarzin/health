@@ -8,7 +8,7 @@ steps:
       - "[ -n \"$IMAGE_TAG\" ] || (echo 'IMAGE_TAG not set, skipping deploy'; exit 78)"
 
   - name: deploy
-    image: bitnami/kubectl:1.32
+    image: bitnami/kubectl:latest
     commands:
       - "kubectl set image deployment/health health=${IMAGE_NAME}:${IMAGE_TAG} -n health"
       - "kubectl rollout status deployment/health -n health --timeout=300s"
