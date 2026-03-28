@@ -14,7 +14,7 @@ steps:
       - "kubectl rollout status deployment/health -n health --timeout=300s"
 
   - name: notify
-    image: woodpeckerci/plugin-slack
+    image: plugins/slack
     settings:
       webhook:
         from_secret: slack-webhook-url
