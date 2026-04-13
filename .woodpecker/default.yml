@@ -11,7 +11,7 @@ clone:
 
 steps:
   - name: build-and-push
-    image: woodpeckerci/plugin-docker-buildx
+    image: plugins/docker
     settings:
       repo: viktorbarzin/health
       dockerfile: Dockerfile
