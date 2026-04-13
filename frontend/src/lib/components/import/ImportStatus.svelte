@@ -150,6 +150,11 @@
         {/if}
       </div>
     </div>
+    {#if currentStatus.error_message}
+      <div class="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2">
+        <p class="text-xs text-red-300">{currentStatus.error_message}</p>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -163,13 +168,16 @@
     {/if}
     {#each imports as imp}
       <div class="flex items-center justify-between p-3 rounded-lg bg-surface-800/50 border border-surface-700">
-        <div class="flex items-center gap-3">
-          <div class="w-2 h-2 rounded-full {imp.status === 'completed' ? 'bg-green-400' : imp.status === 'failed' ? 'bg-red-400' : imp.status === 'cancelled' || imp.status === 'cancelling' ? 'bg-orange-400' : 'bg-yellow-400'}"></div>
-          <div>
-            <p class="text-sm text-surface-200">{imp.filename}</p>
-            <p class="text-xs text-surface-500">{formatDate(imp.imported_at)}</p>
-          </div>
+      <div class="flex items-center gap-3">
+        <div class="w-2 h-2 rounded-full {imp.status === 'completed' ? 'bg-green-400' : imp.status === 'failed' ? 'bg-red-400' : imp.status === 'cancelled' || imp.status === 'cancelling' ? 'bg-orange-400' : 'bg-yellow-400'}"></div>
+        <div>
+          <p class="text-sm text-surface-200">{imp.filename}</p>
+          <p class="text-xs text-surface-500">{formatDate(imp.imported_at)}</p>
+          {#if imp.error_message}
+            <p class="mt-1 max-w-xl text-xs text-red-300">{imp.error_message}</p>
+          {/if}
         </div>
+      </div>
         <div class="flex items-center gap-3">
           <div class="text-right">
             <p class="text-sm text-surface-300">{imp.record_count.toLocaleString()} records</p>

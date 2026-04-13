@@ -175,6 +175,7 @@ async def upload_health_data(
         filename=file.filename,
         status="processing",
         record_count=0,
+        error_message=None,
     )
     db.add(batch)
     await db.commit()
@@ -206,6 +207,7 @@ async def list_uploads(
             record_count=b.record_count,
             filename=b.filename,
             imported_at=b.imported_at,
+            error_message=b.error_message,
         )
         for b in batches
     ]
@@ -236,6 +238,7 @@ async def get_upload_status(
         record_count=batch.record_count,
         filename=batch.filename,
         imported_at=batch.imported_at,
+        error_message=batch.error_message,
     )
 
 
@@ -313,9 +316,8 @@ async def delete_import_batch(
     await db.execute(delete(HealthRecord).where(HealthRecord.batch_id == batch_id))
     # 4. Category records
     await db.execute(delete(CategoryRecord).where(CategoryRecord.batch_id == batch_id))
-    # 5. Activity summaries (no batch_id FK — delete by user + date range overlap)
-    # Activity summaries don't have batch_id, so we skip them in batch delete.
-    # They'll be deduped on re-import via ON CONFLICT DO NOTHING.
+    # 5. Activity summaries
+    await db.execute(delete(ActivitySummary).where(ActivitySummary.batch_id == batch_id))
     # 6. The batch itself
     await db.execute(delete(ImportBatch).where(ImportBatch.id == batch_id))
 
@@ -400,12 +402,13 @@ async def reprocess_import_batch(
     await db.execute(delete(Workout).where(Workout.batch_id == batch_id))
     await db.execute(delete(HealthRecord).where(HealthRecord.batch_id == batch_id))
     await db.execute(delete(CategoryRecord).where(CategoryRecord.batch_id == batch_id))
+    await db.execute(delete(ActivitySummary).where(ActivitySummary.batch_id == batch_id))
 
     # Reset batch status
     await db.execute(
         update(ImportBatch)
         .where(ImportBatch.id == batch_id)
-        .values(status="processing", record_count=0)
+        .values(status="processing", record_count=0, error_message=None)
     )
     await db.commit()
 

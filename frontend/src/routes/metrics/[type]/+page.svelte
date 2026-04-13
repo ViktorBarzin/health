@@ -76,6 +76,7 @@
     <div class="flex items-center gap-3">
       <a
         href="/metrics"
+        aria-label="Back to metrics"
         class="p-1.5 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">

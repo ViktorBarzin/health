@@ -23,3 +23,4 @@ class ImportBatch(Base):
     )
     record_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="processing")
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)

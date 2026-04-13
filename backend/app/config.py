@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     SESSION_MAX_AGE: int = 86400 * 30  # 30 days
     WEBAUTHN_RP_ID: str = "localhost"
     WEBAUTHN_RP_NAME: str = "Health Dashboard"
-    WEBAUTHN_ORIGIN: str = "http://localhost:3000"
+    WEBAUTHN_ORIGIN: str = "http://localhost:8080"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:8080"]
     COOKIE_SECURE: bool = False
 

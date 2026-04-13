@@ -19,13 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install backend Python dependencies
 WORKDIR /app/backend
-COPY backend/pyproject.toml .
+COPY backend/ ./
 RUN pip install --no-cache-dir .
-
-# Copy backend source
-COPY backend/alembic.ini .
-COPY backend/alembic/ alembic/
-COPY backend/app/ app/
 
 # Copy frontend build
 COPY --from=frontend-builder /app/build /app/frontend/build

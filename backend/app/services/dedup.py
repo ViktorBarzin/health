@@ -189,6 +189,7 @@ async def bulk_insert_category_records(
 _ACTIVITY_COLS = [
     "date", "user_id", "active_energy_burned_kj", "active_energy_goal_kj",
     "exercise_minutes", "exercise_goal_minutes", "stand_hours", "stand_goal_hours",
+    "batch_id",
 ]
 
 

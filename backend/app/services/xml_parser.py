@@ -18,14 +18,20 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import date as date_type, datetime
+from pathlib import Path
 from typing import Any
 
 from lxml import etree
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.models.activity_summary import ActivitySummary
+from app.models.category_record import CategoryRecord
 from app.models.data_source import DataSource
+from app.models.health_record import HealthRecord
 from app.models.import_batch import ImportBatch
+from app.models.workout import Workout
+from app.models.workout_route_point import WorkoutRoutePoint
 from app.services.dedup import (
     bulk_insert_activity_summaries,
     bulk_insert_category_records,
@@ -124,6 +130,17 @@ def _parse_apple_date_only(date_str: str | None) -> date_type | None:
         return date_type.fromisoformat(date_str.strip())
     except ValueError:
         logger.warning("Unparseable date-only string: %r", date_str)
+        return None
+
+
+def _parse_iso_datetime(date_str: str | None) -> datetime | None:
+    """Parse a GPX/ISO timestamp."""
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.strip().replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Unparseable ISO datetime: %r", date_str)
         return None
 
 
@@ -231,6 +248,79 @@ def _convert_duration_to_seconds(
         return value
     logger.debug("Unknown duration unit %r; storing raw value", unit)
     return value
+
+
+def _resolve_route_path(
+    route_base_dir: Path | None,
+    file_reference: str | None,
+) -> Path | None:
+    if route_base_dir is None or not file_reference:
+        return None
+
+    reference = Path(file_reference)
+    candidates = []
+    if reference.is_absolute():
+        candidates.append(reference)
+    else:
+        candidates.extend(
+            [
+                route_base_dir / reference,
+                route_base_dir.parent / reference,
+                route_base_dir / "workout-routes" / reference.name,
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _parse_gpx_route_points(
+    gpx_path: Path,
+    workout_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    route_points: list[dict[str, Any]] = []
+    try:
+        context = etree.iterparse(str(gpx_path), events=("end",), recover=True)
+    except OSError:
+        logger.warning("Could not read GPX route file: %s", gpx_path)
+        return route_points
+
+    for _event, elem in context:
+        if not elem.tag.endswith("trkpt"):
+            continue
+
+        point_time = None
+        altitude = None
+        for child in elem:
+            if child.tag.endswith("time"):
+                point_time = _parse_iso_datetime(child.text)
+            elif child.tag.endswith("ele"):
+                altitude = _safe_float(child.text)
+
+        latitude = _safe_float(elem.get("lat"))
+        longitude = _safe_float(elem.get("lon"))
+        if point_time is not None and latitude is not None and longitude is not None:
+            route_points.append(
+                {
+                    "time": point_time,
+                    "workout_id": workout_id,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "altitude_m": altitude,
+                }
+            )
+
+        elem.clear()
+        while elem.getprevious() is not None:
+            parent = elem.getparent()
+            if parent is None:
+                break
+            del parent[0]
+
+    return route_points
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +455,7 @@ def _process_workout_element(
     user_id: int,
     batch_id: str,
     source_id: int | None,
+    route_base_dir: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Convert a ``<Workout>`` element into a workout dict and route points."""
     start = _parse_apple_date(elem.get("startDate"))
@@ -413,9 +504,13 @@ def _process_workout_element(
         "metadata": metadata if metadata else None,
     }
 
-    # Parse route points from nested <WorkoutRoute>/<Location> elements
     route_points: list[dict[str, Any]] = []
+    route_file_refs: list[str] = []
     for route in elem.iter("WorkoutRoute"):
+        for file_ref in route.iter("FileReference"):
+            file_reference = file_ref.get("path") or file_ref.get("filepath")
+            if file_reference:
+                route_file_refs.append(file_reference)
         for loc in route.iter("Location"):
             pt_time = _parse_apple_date(loc.get("date"))
             lat = _safe_float(loc.get("latitude"))
@@ -432,12 +527,21 @@ def _process_workout_element(
                     }
                 )
 
+    if not route_points and route_file_refs:
+        for file_reference in route_file_refs:
+            route_path = _resolve_route_path(route_base_dir, file_reference)
+            if route_path is None:
+                logger.warning("Could not resolve workout route reference: %s", file_reference)
+                continue
+            route_points.extend(_parse_gpx_route_points(route_path, workout_id))
+
     return workout, route_points
 
 
 def _process_activity_summary_element(
     elem: etree._Element,
     user_id: int,
+    batch_id: str,
 ) -> dict[str, Any] | None:
     """Convert an ``<ActivitySummary>`` element into a dict."""
     d = _parse_apple_date_only(elem.get("dateComponents"))
@@ -459,7 +563,24 @@ def _process_activity_summary_element(
         ),
         "stand_hours": _safe_int(elem.get("appleStandHours")),
         "stand_goal_hours": _safe_int(elem.get("appleStandHoursGoal")),
+        "batch_id": batch_id,
     }
+
+
+def _raise_for_parser_errors(error_log: etree._ListErrorLog) -> None:
+    fatal_errors = [
+        entry for entry in error_log
+        if entry.level_name == "FATAL"
+    ]
+    if not fatal_errors:
+        return
+
+    first_error = fatal_errors[0]
+    raise ValueError(
+        "The Apple Health export is malformed and could only be parsed "
+        f"partially. First fatal parser error at line {first_error.line}: "
+        f"{first_error.message}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +610,7 @@ async def _producer(
     route_point_count = 0
     activity_count = 0
     skipped_workouts = 0
+    route_base_dir = Path(file_path).resolve().parent
 
     # Use recover=True to tolerate malformed XML (Apple Health exports
     # sometimes contain unescaped characters in attribute values).
@@ -532,7 +654,7 @@ async def _producer(
 
         elif tag == "Workout":
             workout, route_points = _process_workout_element(
-                elem, user_id, batch_id, source_id
+                elem, user_id, batch_id, source_id, route_base_dir
             )
             if workout["time"] is None:
                 logger.warning(
@@ -548,7 +670,7 @@ async def _producer(
                 total_count += 1
 
         elif tag == "ActivitySummary":
-            summary = _process_activity_summary_element(elem, user_id)
+            summary = _process_activity_summary_element(elem, user_id, batch_id)
             if summary is not None:
                 batch.activity.append(summary)
                 activity_count += 1
@@ -572,6 +694,8 @@ async def _producer(
             if parent is None:
                 break
             del parent[0]
+
+    _raise_for_parser_errors(context.error_log)
 
     # Enqueue any remaining records
     if len(batch) > 0 and not cancelled[0]:
@@ -833,7 +957,11 @@ async def parse_health_export(
             await session.execute(
                 update(ImportBatch)
                 .where(ImportBatch.id == batch_id)
-                .values(record_count=total_count, status=final_status)
+                .values(
+                    record_count=total_count,
+                    status=final_status,
+                    error_message=None,
+                )
             )
             await session.commit()
 
@@ -842,17 +970,39 @@ async def parse_health_export(
             batch_id, final_status, total_count,
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Import %s failed", batch_id)
         if reporter_task is not None:
             reporter_task.cancel()
         # Best-effort status update
         try:
             async with db_session_factory() as session:
+                workout_ids_stmt = select(Workout.id).where(Workout.batch_id == batch_id)
+                await session.execute(
+                    delete(WorkoutRoutePoint).where(
+                        WorkoutRoutePoint.workout_id.in_(workout_ids_stmt)
+                    )
+                )
+                await session.execute(
+                    delete(ActivitySummary).where(ActivitySummary.batch_id == batch_id)
+                )
+                await session.execute(
+                    delete(CategoryRecord).where(CategoryRecord.batch_id == batch_id)
+                )
+                await session.execute(
+                    delete(HealthRecord).where(HealthRecord.batch_id == batch_id)
+                )
+                await session.execute(
+                    delete(Workout).where(Workout.batch_id == batch_id)
+                )
                 await session.execute(
                     update(ImportBatch)
                     .where(ImportBatch.id == batch_id)
-                    .values(record_count=total_count, status="failed")
+                    .values(
+                        record_count=total_count,
+                        status="failed",
+                        error_message=str(exc)[:1000],
+                    )
                 )
                 await session.commit()
         except Exception:

@@ -165,6 +165,8 @@
         rx="2"
         fill={getCellColor(cell.intensity)}
         class="cursor-pointer transition-colors duration-100"
+        role="img"
+        aria-label={`${cell.date}: ${cell.value.toLocaleString()}`}
         onmouseenter={(e) => handleMouseEnter(e, cell)}
         onmouseleave={handleMouseLeave}
       />

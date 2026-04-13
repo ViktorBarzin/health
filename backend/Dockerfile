@@ -6,12 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev libxslt1-dev gcc && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
+COPY . .
 RUN pip install --no-cache-dir .
-
-COPY alembic.ini .
-COPY alembic/ alembic/
-COPY app/ app/
 
 EXPOSE 8000
 

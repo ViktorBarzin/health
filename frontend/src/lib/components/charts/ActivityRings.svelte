@@ -11,8 +11,8 @@
     size = 120,
   }: Props = $props();
 
-  const strokeWidth = size * 0.1;
-  const center = size / 2;
+  let strokeWidth = $derived(size * 0.1);
+  let center = $derived(size / 2);
 
   const rings = $derived([
     {

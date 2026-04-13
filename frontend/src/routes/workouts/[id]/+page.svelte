@@ -11,7 +11,7 @@
   let hrData = $state<MetricDataPoint[]>([]);
   let loading = $state(true);
   let error = $state('');
-  let mapContainer: HTMLDivElement;
+  let mapContainer = $state<HTMLDivElement | null>(null);
   let mapInstance: any = null;
 
   $effect(() => {

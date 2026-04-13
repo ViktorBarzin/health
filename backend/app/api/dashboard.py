@@ -3,12 +3,13 @@
 from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.activity_summary import ActivitySummary
+from app.models.category_record import CategoryRecord
 from app.models.health_record import HealthRecord
 from app.models.user import User
 from app.schemas.dashboard import DashboardSummary
@@ -23,6 +24,7 @@ _LATEST_METRICS = [
     "HeartRateVariabilitySDNN",
     "OxygenSaturation",
 ]
+_SLEEP_ASLEEP_PATTERN = "%Asleep%"
 
 
 def _ensure_utc(dt_val: datetime) -> datetime:
@@ -130,6 +132,34 @@ async def get_dashboard_summary(
     latest_result = await db.execute(latest_stmt)
     latest_map = {row.metric_type: row.value for row in latest_result.all()}
 
+    sleep_anchor = func.coalesce(CategoryRecord.end_time, CategoryRecord.time)
+    sleep_hours = (
+        func.extract("epoch", sleep_anchor - CategoryRecord.time) / 3600.0
+    )
+    sleep_filters = [
+        CategoryRecord.user_id == user.id,
+        CategoryRecord.category_type == "SleepAnalysis",
+        CategoryRecord.value.like(_SLEEP_ASLEEP_PATTERN),
+        CategoryRecord.end_time.is_not(None),
+    ]
+    if start is not None:
+        sleep_filters.append(CategoryRecord.time >= range_start)
+    if range_end is not None:
+        sleep_filters.append(sleep_anchor <= range_end)
+
+    sleep_stmt = (
+        select(
+            func.date_trunc("day", sleep_anchor).label("bucket"),
+            func.sum(sleep_hours).label("hours"),
+        )
+        .where(*sleep_filters)
+        .group_by("bucket")
+        .order_by(text("bucket DESC"))
+        .limit(1)
+    )
+    sleep_result = await db.execute(sleep_stmt)
+    sleep_row = sleep_result.one_or_none()
+
     return DashboardSummary(
         steps_today=steps,
         active_energy_today=active_energy,
@@ -138,5 +168,5 @@ async def get_dashboard_summary(
         resting_hr=latest_map.get("RestingHeartRate"),
         hrv=latest_map.get("HeartRateVariabilitySDNN"),
         spo2=latest_map.get("OxygenSaturation"),
-        sleep_hours_last_night=latest_map.get("SleepAnalysis"),
+        sleep_hours_last_night=round(sleep_row.hours, 4) if sleep_row else None,
     )
