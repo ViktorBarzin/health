@@ -1,9 +1,14 @@
 # Apple Health Dashboard — Project Knowledge
 
+> **Direction (2026-06-12):** this app is being extended into a multi-user fitness platform
+> (Fitbod + MyFitnessPal replacement). Read `CONTEXT.md` (vocabulary), `docs/adr/`
+> (decisions), and `docs/plans/2026-06-12-fitness-platform-roadmap.md` before working here.
+
 ## Overview
 
-Full-stack Apple Health data dashboard: FastAPI backend, SvelteKit frontend, TimescaleDB,
-WebAuthn auth. Imports Apple Health XML/ZIP exports and provides interactive visualizations.
+Full-stack Apple Health data dashboard: FastAPI backend, SvelteKit frontend, Postgres,
+WebAuthn auth (being replaced by Authentik identity — ADR-0003). Imports Apple Health
+XML/ZIP exports and provides interactive visualizations.
 
 ## Architecture
 
@@ -12,7 +17,8 @@ SvelteKit (:3000) → /api/*  → Backend (FastAPI :8000, internal proxy)
                   → /*      → SvelteKit SSR
 ```
 
-**Stack:** Python 3.12, FastAPI, SQLAlchemy async + asyncpg, TimescaleDB (PG16), SvelteKit, Docker Compose
+**Stack:** Python 3.12, FastAPI, SQLAlchemy async + asyncpg, Postgres (TimescaleDB image in
+local docker-compose only — prod is plain Postgres on the shared CNPG cluster), SvelteKit, Docker Compose
 
 ## Running Locally
 
