@@ -35,8 +35,9 @@ Foundations folded in only where M1 needs them:
    muscle mappings, images); per-user custom Exercises.
 5. **Fitbod importer**: CSV → Sessions/Sets (preserve warmup flags), exercise-name mapping
    onto the library with a manual-match UI for stragglers.
-6. **Session logging UX**: phone-first logging — weight × reps + optional RPE; Gym Profile
-   (equipment) management.
+6. **Session logging UX**: phone-first logging — weight × reps + optional Effort (one-tap
+   reps-in-reserve chips 0–4+, last-set nudge, never blocking); Gym Profile (equipment)
+   management.
 7. **Engine** (ADR-0002): per-muscle Recovery scores from Set history, per-exercise
    Progression targets, equipment-aware generator producing a Recommendation per visit;
    claude-agent-service layer for conversational adjustment (proposes, never decides).
@@ -88,6 +89,9 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 ## Open items for implementation sessions
 
 - Recovery model details (muscle-group fatigue decay curves) — research at M1 build time.
+- Progression mechanics at engine-build time: RIR→RPE mapping, effort-adjusted e1RM
+  formula choice (Epley/Brzycki family), load-increment and back-off thresholds — all as
+  cited Principles (Zourdos 2016; Graham & Cleather 2021; Refalo 2023).
 - Principles KB content: author the rules and verify every citation against the primary
   literature (deep-research pass); define the preset parameterizations (GZCLP,
   upper/lower, PPL, 5/3/1-style) on top of the generator.

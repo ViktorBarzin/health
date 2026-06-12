@@ -19,8 +19,13 @@ the user logs.
 _Avoid_: activity, exercise session
 
 **Set**:
-One performed set within a Session: an Exercise, weight × reps, optional RPE.
+One performed set within a Session: an Exercise, weight × reps, optional Effort.
 Warmup flags exist on imported history but are not part of the live logging flow.
+
+**Effort**:
+A one-tap reps-in-reserve rating on a Set (0 / 1 / 2 / 3 / 4+ — "how many more reps were
+left?"); optional on every Set, nudged on an Exercise's last Set, stored as RPE-equivalent.
+_Avoid_: RPE, difficulty
 
 **Exercise**:
 An entry in the shared exercise library — a movement with muscle mappings. Seeded from
@@ -120,6 +125,9 @@ samples.
   user's edits always win
 - A **Recommendation** without an active **Program** is generated freestyle from
   **Recovery** + **Progression** state within the user's **Gym Profile**
+- **Progression** consumes rep performance and logged **Effort** (effort-gated double
+  progression); when Effort is missing it falls back to rep performance alone — rating is
+  never required
 - Programs and Recommendations are always generated — user-authored plans remain a
   non-goal (ADR-0002, ADR-0004)
 - The **Exercise** library is shared across users; Sessions, Sets, Workouts, and Metric
