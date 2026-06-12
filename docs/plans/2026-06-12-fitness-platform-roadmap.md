@@ -5,7 +5,8 @@ fitness platform — replacing **Fitbod** (workout generation) and **MyFitnessPa
 (nutrition) — fed by as much personal health data as possible.
 
 Decisions of record: ADR-0001 (extend this app), ADR-0002 (deterministic engine core, LLM
-proposes), ADR-0003 (Authentik identity). Vocabulary: `CONTEXT.md`.
+proposes), ADR-0003 (Authentik identity), ADR-0004 (Goal-driven Programs from a cited
+Principles KB — added same evening). Vocabulary: `CONTEXT.md`.
 
 ## Facts the plan is built on
 
@@ -39,10 +40,18 @@ Foundations folded in only where M1 needs them:
 7. **Engine** (ADR-0002): per-muscle Recovery scores from Set history, per-exercise
    Progression targets, equipment-aware generator producing a Recommendation per visit;
    claude-agent-service layer for conversational adjustment (proposes, never decides).
-8. **Workout↔Session auto-linking** by time overlap (watch recording enriches the logged
-   Session).
+8. **Principles KB** (ADR-0004): versioned exercise-science rules with parameter ranges,
+   applicability, evidence grades, and verified peer-reviewed citations — the sole source
+   the generators compose from. Authoring = research pass with citation verification.
+9. **Program layer** (ADR-0004): guided quiz (goal, days/week, experience, equipment,
+   session length) + preset catalog (GZCLP, upper/lower hypertrophy, PPL, 5/3/1-style)
+   generating multi-week Programs; full autoregulation (Recovery/Readiness trims, week
+   reflow, fatigue-triggered Deload; user edits win); "receipts everywhere" UI — every
+   parameter tappable to its Principle and studies.
+10. **Workout↔Session auto-linking** by time overlap (watch recording enriches the logged
+    Session).
 
-Exit criterion: Viktor generates and logs real gym workouts here and deletes Fitbod.
+Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes Fitbod.
 
 ## M2 — Health (continuous data + insights)
 
@@ -65,17 +74,23 @@ Exit criterion: Viktor generates and logs real gym workouts here and deletes Fit
 
 ## Deliberate non-goals
 
-- User-authored workout plans/templates (ADR-0002 — generated-per-visit only).
+- User-authored workout plans/templates (ADR-0002/ADR-0004 — Programs and visits are
+  always generated).
 - Strava/Garmin/Withings connectors; Health Auto Export or any third-party sync app.
 - Sharing/social features: accounts are fully isolated; only the Exercise library and Food
   catalog are shared. (Revisit on real demand.)
 - Staleness nudges, weekly LLM digest, weight forecasting (cut in the extras round).
+  Internal weight-trend math for Budget self-calibration is allowed (ADR-0004) — there is
+  just no forecast UI.
 - TimescaleDB: prod stays plain Postgres on the shared CNPG cluster; partition
   `health_records` by time only if growth ever forces it.
 
 ## Open items for implementation sessions
 
 - Recovery model details (muscle-group fatigue decay curves) — research at M1 build time.
+- Principles KB content: author the rules and verify every citation against the primary
+  literature (deep-research pass); define the preset parameterizations (GZCLP,
+  upper/lower, PPL, 5/3/1-style) on top of the generator.
 - Fitbod CSV column inventory against a real export from Viktor's account.
 - Barcode decoder library choice; generic-foods seed source (USDA FDC vs curated list).
 - Whether custom Exercises/Foods are visible to other users or private (default: private).

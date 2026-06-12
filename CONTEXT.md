@@ -29,10 +29,26 @@ _Avoid_: movement, lift
 
 ### Recommendation
 
+**Program**:
+A generated multi-week training schedule serving the user's Goal — split structure,
+ramping weekly per-muscle volume targets, progression scheme, and Deloads. Entered via a
+guided quiz or picked from a catalog of named presets; never user-authored.
+_Avoid_: template, routine, plan
+
 **Recommendation**:
-A generated Session proposal — exercises with target sets × reps × weight — produced for
-one gym visit; starting it instantiates the Session the user logs against.
-_Avoid_: plan, program, routine
+A generated Session proposal — exercises with target sets × reps × weight — for one gym
+visit: drawn from the active Program when one is running, freestyle otherwise; starting it
+instantiates the Session the user logs against.
+_Avoid_: plan, routine
+
+**Principle**:
+A versioned rule in the exercise-science knowledge base — statement, parameter ranges,
+applicability, evidence grade, and peer-reviewed citations — from which every Program and
+Recommendation parameter derives.
+
+**Deload**:
+A planned reduced-load period closing a Program block; calendar-scheduled by the Program
+and triggered early by fatigue signals.
 
 **Recovery**:
 The per-muscle freshness score computed from recent Set history; steers exercise selection
@@ -68,11 +84,13 @@ One of the four daily slots a Diary Entry lands in: breakfast, lunch, dinner, sn
 
 **Budget**:
 The daily calorie/macro target derived from the user's Goal and their measured energy
-expenditure (watch data), not a static formula.
+expenditure (watch data), self-calibrating against the observed weight trend — never a
+static formula.
 _Avoid_: target, allowance
 
 **Goal**:
-The user's current intent — cut, maintain, or bulk — parameterizing the Budget.
+The user's current intent — bulk, cut, maintain, strength — a single object parameterizing
+both the active Program and the Budget.
 
 ### Ingestion
 
@@ -95,8 +113,15 @@ samples.
 - A **Workout** covering the same physical event as a **Session** is auto-linked to it by
   time overlap; the UI presents the linked pair as one enriched Session
 - An **Import** produces **Workouts** and **Metric** samples, each attributed to a **Source**
-- A **Recommendation** is generated from **Recovery** + **Progression** state within the
-  user's **Gym Profile**; there is no user-authored plan concept (deliberate — ADR-0002)
+- A **Goal** drives both the active **Program** and the **Budget** — one object across
+  training and nutrition (ADR-0004)
+- A **Program** is generated from **Principles**; the daily **Recommendation** is drawn
+  from the active **Program** and autoregulated by **Recovery** and **Readiness** — the
+  user's edits always win
+- A **Recommendation** without an active **Program** is generated freestyle from
+  **Recovery** + **Progression** state within the user's **Gym Profile**
+- Programs and Recommendations are always generated — user-authored plans remain a
+  non-goal (ADR-0002, ADR-0004)
 - The **Exercise** library is shared across users; Sessions, Sets, Workouts, and Metric
   samples are private to their user
 
@@ -113,3 +138,6 @@ samples.
 
 - "workout" was used for both the logged gym activity and the imported watch recording —
   resolved 2026-06-12: logged = **Session**, imported = **Workout**.
+- "plan" was cut, then reopened the same evening — resolved 2026-06-12: generated
+  multi-week **Programs** exist (ADR-0004); *user-authored* plans remain out. "Plan" stays
+  an avoided word; say **Program** (multi-week) or **Recommendation** (today).

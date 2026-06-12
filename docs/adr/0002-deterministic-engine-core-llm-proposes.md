@@ -1,6 +1,8 @@
 # Recommendation engine: deterministic core, LLM proposes on top
 
-Status: accepted (Viktor, 2026-06-12)
+Status: accepted (Viktor, 2026-06-12). Consequence "generated each visit / no plan concept"
+superseded-in-part by ADR-0004 the same day: generated multi-week **Programs** were added;
+user-authored plans remain out. The engine architecture below stands.
 
 The engine must replicate all four Fitbod capabilities: per-muscle recovery balancing,
 per-exercise progressive overload, equipment-aware exercise selection, and whole-workout
