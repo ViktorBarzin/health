@@ -16,12 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.exercise import Exercise, ExerciseMuscle, Muscle, MuscleRole
+from app.models.exercise_pref import DEFAULT_REST_SECONDS, ExercisePref
 from app.models.user import User
 from app.schemas.exercises import (
     ExerciseCreate,
     ExerciseDetail,
     ExerciseSummary,
     MuscleOption,
+    RestPrefRead,
+    RestPrefUpdate,
 )
 
 router = APIRouter()
@@ -157,6 +160,87 @@ async def get_exercise(
             status_code=status.HTTP_404_NOT_FOUND, detail="Exercise not found"
         )
     return ExerciseDetail.model_validate(exercise)
+
+
+async def _assert_exercise_visible(
+    db: AsyncSession, exercise_id: uuid.UUID, user: User
+) -> None:
+    """Raise 404 unless the Exercise exists and is visible (global or own)."""
+    stmt = select(Exercise.id).where(
+        Exercise.id == exercise_id,
+        or_(Exercise.user_id.is_(None), Exercise.user_id == user.id),
+    )
+    if (await db.execute(stmt)).scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Exercise not found"
+        )
+
+
+@router.get("/{exercise_id}/rest", response_model=RestPrefRead)
+async def get_rest_pref(
+    exercise_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RestPrefRead:
+    """The caller's rest-timer default for an Exercise (with the global fallback).
+
+    Per-user (CONTEXT.md: the library is shared, so a rest default can't live on
+    the global Exercise row) — returns the user's override plus the effective
+    value the timer should use.
+    """
+    await _assert_exercise_visible(db, exercise_id, user)
+    pref = (
+        await db.execute(
+            select(ExercisePref).where(
+                ExercisePref.user_id == user.id,
+                ExercisePref.exercise_id == exercise_id,
+            )
+        )
+    ).scalar_one_or_none()
+    override = pref.default_rest_seconds if pref else None
+    return RestPrefRead(
+        exercise_id=exercise_id,
+        default_rest_seconds=override,
+        effective_rest_seconds=override
+        if override is not None
+        else DEFAULT_REST_SECONDS,
+    )
+
+
+@router.put("/{exercise_id}/rest", response_model=RestPrefRead)
+async def set_rest_pref(
+    exercise_id: uuid.UUID,
+    payload: RestPrefUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RestPrefRead:
+    """Set or clear the caller's rest-timer default for an Exercise.
+
+    Upserts the per-user pref row (creating it on first set). A ``null`` value
+    clears the override so the global default applies again.
+    """
+    await _assert_exercise_visible(db, exercise_id, user)
+    pref = (
+        await db.execute(
+            select(ExercisePref).where(
+                ExercisePref.user_id == user.id,
+                ExercisePref.exercise_id == exercise_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if pref is None:
+        pref = ExercisePref(user_id=user.id, exercise_id=exercise_id)
+        db.add(pref)
+    pref.default_rest_seconds = payload.default_rest_seconds
+    await db.flush()
+    override = pref.default_rest_seconds
+    return RestPrefRead(
+        exercise_id=exercise_id,
+        default_rest_seconds=override,
+        effective_rest_seconds=override
+        if override is not None
+        else DEFAULT_REST_SECONDS,
+    )
 
 
 def _custom_slug(name: str) -> str:

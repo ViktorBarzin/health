@@ -37,6 +37,7 @@ from app.schemas.sessions import (
     SetReorder,
     SetUpdate,
     SetWriteResult,
+    SupersetGroupRequest,
 )
 from app.services.effort import rir_to_rpe
 from app.services.pr_service import detect_and_persist_prs, reconcile_exercise_prs
@@ -257,6 +258,7 @@ async def add_set(
         reps=payload.reps,
         rpe=rir_to_rpe(payload.effort_rir),
         set_type=payload.set_type,
+        superset_group=payload.superset_group,
     )
     db.add(new_set)
     await db.flush()
@@ -314,6 +316,9 @@ async def update_set(
         training_set.set_type = fields["set_type"]
     if "effort_rir" in fields:
         training_set.rpe = rir_to_rpe(fields["effort_rir"])
+    # Superset grouping: present (even as null) rewrites it; null clears it.
+    if "superset_group" in fields:
+        training_set.superset_group = fields["superset_group"]
 
     await db.flush()
     prs = await detect_and_persist_prs(db, training_set)
@@ -398,5 +403,68 @@ async def reorder_sets(
         by_id[sid].order_index = new_index
     await db.flush()
 
+    await db.refresh(session, attribute_names=["sets"])
+    return _detail(session)
+
+
+@router.post("/{session_id}/supersets", response_model=SessionDetail)
+async def group_superset(
+    session_id: uuid.UUID,
+    payload: SupersetGroupRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    """Group the given Sets of a Session into one Superset (alternation group).
+
+    All ``set_ids`` must belong to the Session and span at least two distinct
+    Exercises (a Superset is two or more Exercises in alternation — CONTEXT.md).
+    A fresh per-Session group id (max existing + 1) is assigned to every named
+    Set, so an existing standalone or differently-grouped Set is re-tagged into
+    this Superset. The display grouping/alternation is then derived client-side
+    from these tags (``lib/superset.ts``).
+    """
+    session = await _get_owned_session(db, session_id, user)
+    by_id = {s.id: s for s in session.sets}
+    requested = list(payload.set_ids)
+
+    if any(sid not in by_id for sid in requested):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="set_ids must all belong to this Session",
+        )
+    if len({by_id[sid].exercise_id for sid in requested}) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="a Superset needs at least two distinct Exercises",
+        )
+
+    next_group = (
+        max((s.superset_group for s in session.sets if s.superset_group is not None),
+            default=-1)
+        + 1
+    )
+    for sid in requested:
+        by_id[sid].superset_group = next_group
+    await db.flush()
+    await db.refresh(session, attribute_names=["sets"])
+    return _detail(session)
+
+
+@router.delete("/{session_id}/supersets/{group}", response_model=SessionDetail)
+async def ungroup_superset(
+    session_id: uuid.UUID,
+    group: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    """Disband a Superset: clear the group tag from every Set carrying it.
+
+    Idempotent — clearing a group that no Set carries simply changes nothing.
+    """
+    session = await _get_owned_session(db, session_id, user)
+    for s in session.sets:
+        if s.superset_group == group:
+            s.superset_group = None
+    await db.flush()
     await db.refresh(session, attribute_names=["sets"])
     return _detail(session)

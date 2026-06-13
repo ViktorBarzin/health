@@ -24,8 +24,12 @@ Design choices for this slice (online logging only):
   total and gap-free per Session; reordering rewrites the indices.
 * ``set_type`` is a native Postgres enum so later volume/PR analytics filter on a
   typed dimension (the same pattern as the Exercise muscle enums).
-* Supersets are explicitly out of scope for this slice (#7); no group column is
-  added yet.
+* **Supersets** (#7): a Set carries a nullable ``superset_group`` integer. Sets
+  sharing a group id within a Session form one Superset (CONTEXT.md: "two or more
+  Exercises logged in alternation"); NULL means standalone. A small per-Session
+  integer — not a UUID or a separate grouping table — is the lightest model that
+  lets the logger alternate; grouping/alternation logic is pure and lives in the
+  frontend (``lib/superset.ts``).
 """
 
 import enum
@@ -150,6 +154,10 @@ class TrainingSet(Base):
     set_type: Mapped[SetType] = mapped_column(
         _SET_TYPE_ENUM, nullable=False, default=SetType.normal
     )
+    # Superset grouping (#7): Sets sharing this small per-Session integer are one
+    # Superset, logged in alternation. NULL = a standalone Set. Not a FK / not a
+    # separate table — just a grouping tag the logger and analytics read.
+    superset_group: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     session: Mapped["TrainingSession"] = relationship(back_populates="sets")
     exercise: Mapped["Exercise"] = relationship(lazy="selectin")  # noqa: F821

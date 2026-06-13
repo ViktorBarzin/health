@@ -72,3 +72,28 @@ class MuscleOption(BaseModel):
 
     value: str
     label: str
+
+
+class RestPrefRead(BaseModel):
+    """A user's rest-timer preference for one Exercise (#7).
+
+    ``default_rest_seconds`` is the user's explicit override (NULL if unset);
+    ``effective_rest_seconds`` is what the timer actually uses — the override or
+    the app's global default — so the logger can start a countdown without
+    second-guessing the fallback.
+    """
+
+    exercise_id: uuid.UUID
+    default_rest_seconds: int | None = None
+    effective_rest_seconds: int
+
+
+class RestPrefUpdate(BaseModel):
+    """Set (or clear) a user's rest default for an Exercise.
+
+    ``null`` clears the override (the global default then applies); a value sets
+    it. Bounded to a sane range — a rest timer of 0 or hours makes no sense.
+    """
+
+    default_rest_seconds: int | None = Field(default=None, ge=5, le=1800)
+    model_config = {"extra": "forbid"}

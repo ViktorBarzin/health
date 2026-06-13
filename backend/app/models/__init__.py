@@ -9,6 +9,8 @@ from app.models.activity_summary import ActivitySummary
 from app.models.exercise import Exercise, ExerciseMuscle, Muscle, MuscleRole
 from app.models.training_session import SetType, TrainingSession, TrainingSet
 from app.models.personal_record import PersonalRecord
+from app.models.gym_profile import GymProfile
+from app.models.exercise_pref import ExercisePref
 
 __all__ = [
     "User",
@@ -27,4 +29,6 @@ __all__ = [
     "TrainingSession",
     "TrainingSet",
     "PersonalRecord",
+    "GymProfile",
+    "ExercisePref",
 ]

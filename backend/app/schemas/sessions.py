@@ -29,6 +29,9 @@ class SetCreate(BaseModel):
     # One-tap Effort: 0,1,2,3,4 (4 = the "4+" chip). Optional on every Set.
     effort_rir: int | None = Field(default=None, ge=0, le=4)
     set_type: SetType = SetType.normal
+    # Superset grouping (#7): Sets sharing this per-Session integer are logged in
+    # alternation. NULL/omitted = a standalone Set.
+    superset_group: int | None = Field(default=None, ge=0)
 
 
 class SetUpdate(BaseModel):
@@ -43,6 +46,9 @@ class SetUpdate(BaseModel):
     reps: int | None = Field(default=None, ge=0, le=10000)
     effort_rir: int | None = Field(default=None, ge=0, le=4)
     set_type: SetType | None = None
+    # Superset grouping (#7). Like effort_rir, "omitted" leaves it unchanged while
+    # explicit ``null`` clears it (the route checks whether the field was set).
+    superset_group: int | None = Field(default=None, ge=0)
 
     model_config = {"extra": "forbid"}
 
@@ -63,6 +69,8 @@ class SetRead(BaseModel):
     set_type: SetType
     # The stored RPE-equivalent, presented to the client as the RIR chip value.
     effort_rir: int | None = None
+    # Superset grouping (#7): the per-Session group id, or NULL for standalone.
+    superset_group: int | None = None
     exercise_name: str | None = None
 
     model_config = {"from_attributes": True}
@@ -84,6 +92,7 @@ class SetRead(BaseModel):
             "reps": data.reps,
             "set_type": data.set_type,
             "effort_rir": rpe_to_rir(rpe),
+            "superset_group": data.superset_group,
             "exercise_name": getattr(exercise, "name", None),
         }
 
@@ -185,3 +194,14 @@ class SetReorder(BaseModel):
     """Reorder a Session's Sets: the full list of Set ids in the desired order."""
 
     set_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+class SupersetGroupRequest(BaseModel):
+    """Group the given Sets into one Superset (a fresh group id is assigned).
+
+    The Sets must span at least two distinct Exercises (a Superset is two or more
+    Exercises in alternation — CONTEXT.md); the route validates that.
+    """
+
+    set_ids: list[uuid.UUID] = Field(min_length=2)
+    model_config = {"extra": "forbid"}

@@ -5,6 +5,7 @@
   import { formatDate } from '$lib/utils/format';
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
+  import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
 
   let imports = $state<ImportStatusType[]>([]);
   let activeBatchId = $state<string | undefined>(undefined);
@@ -32,6 +33,15 @@
 </script>
 
 <div class="max-w-3xl mx-auto space-y-8">
+  <!-- Gym Profile Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Gym Profile</h2>
+      <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
+    </div>
+    <GymProfileSettings />
+  </section>
+
   <!-- Data Import Section -->
   <section>
     <div class="mb-4">

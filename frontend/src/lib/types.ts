@@ -134,6 +134,8 @@ export interface TrainingSet {
   reps: number;
   set_type: SetType;
   effort_rir: number | null;
+  /** Superset group id (Sets sharing it are logged in alternation), or null. */
+  superset_group: number | null;
   exercise_name: string | null;
 }
 
@@ -159,6 +161,7 @@ export interface SetCreate {
   reps: number;
   effort_rir?: number | null;
   set_type?: SetType;
+  superset_group?: number | null;
 }
 
 /** Payload to edit a Set (only sent fields change). */
@@ -167,6 +170,7 @@ export interface SetUpdate {
   reps?: number;
   effort_rir?: number | null;
   set_type?: SetType;
+  superset_group?: number | null;
 }
 
 /** A personal record a written Set achieved (see lib/pr.ts `PRKind`). */
@@ -233,4 +237,25 @@ export interface E1rmTrendResponse {
   exercise_id: string;
   points: E1rmPoint[];
   best_e1rm: number | null;
+}
+
+// --- In-gym toolkit (Gym Profile, rest timer) ---
+
+/** A user's available equipment (GET/PUT /api/gym-profile). */
+export interface GymProfile {
+  /** Bar weights owned, kg (sorted ascending). */
+  bar_weights_kg: number[];
+  /** Plate denominations owned, kg (each available in pairs, sorted ascending). */
+  plate_weights_kg: number[];
+  /** Equipment kinds available, aligned with the Exercise library's values. */
+  equipment: string[];
+}
+
+/** A user's rest-timer preference for one Exercise (GET/PUT /api/exercises/{id}/rest). */
+export interface RestPref {
+  exercise_id: string;
+  /** The user's explicit override in seconds, or null if unset. */
+  default_rest_seconds: number | null;
+  /** What the timer should use: the override, or the app's global default. */
+  effective_rest_seconds: number;
 }
