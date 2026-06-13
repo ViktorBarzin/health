@@ -26,6 +26,9 @@ uploads/
 *.swo
 *~
 
+# Playwright MCP scratch artifacts (screenshots, snapshots, console logs)
+.playwright-mcp/
+
 # OS
 .DS_Store
 Thumbs.db

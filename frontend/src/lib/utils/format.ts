@@ -9,6 +9,16 @@ export function formatNumber(n: number, decimals: number = 0): string {
 }
 
 /**
+ * Format a weight in kg, showing fractional plates precisely but dropping
+ * trailing zeros: 20 → "20", 2.5 → "2.5", 1.25 → "1.25". Used by the plate /
+ * warm-up calculators and the Gym Profile, where 2.5 must never render as "3".
+ */
+export function formatWeight(kg: number): string {
+  return kg
+    .toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+/**
  * Format a date string or Date object.
  */
 export function formatDate(d: string | Date, style: 'short' | 'long' = 'short'): string {

@@ -180,3 +180,10 @@ downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.
 - "no connectors — everything rides export.zip, Strava is a pure mirror" (2026-06-12) was
   reversed 2026-06-13: opt-in **Connectors** are now a first-class, extensible part of the
   platform (ADR-0006). Apple export.zip remains one Connector among several.
+- The first shipped Connector framework is the **BYOT** (bring-your-own-token) variant
+  (2026-06-13): each user pastes their **own** API token per provider (Oura via a Personal
+  Access Token is the reference), stored encrypted at rest and pulled on a schedule. This
+  **replaces, for now, the ADR-0006 infra-gated bearer-ingest push receiver and single-app
+  OAuth registration** — both deferred. New providers slot in behind the same
+  `SourceConnector` ABC: Whoop (OAuth, when an app is registered) and Garmin (unofficial
+  login, the "allowed-but-flagged" path) are documented, not built.

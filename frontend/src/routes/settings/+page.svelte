@@ -1,16 +1,18 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { auth } from '$lib/stores/auth.svelte';
-  import { goto } from '$app/navigation';
   import type { ImportStatus as ImportStatusType } from '$lib/types';
   import { formatDate } from '$lib/utils/format';
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
+  import FitbodImport from '$lib/components/import/FitbodImport.svelte';
+  import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
+  import ExportData from '$lib/components/settings/ExportData.svelte';
+  import Connections from '$lib/components/settings/Connections.svelte';
 
   let imports = $state<ImportStatusType[]>([]);
   let activeBatchId = $state<string | undefined>(undefined);
   let loadingImports = $state(true);
-  let loggingOut = $state(false);
 
   $effect(() => {
     loadImports();
@@ -31,15 +33,27 @@
   function handleUploadComplete(batchId: string) {
     activeBatchId = batchId;
   }
-
-  async function handleLogout() {
-    loggingOut = true;
-    await auth.logout();
-    goto('/login');
-  }
 </script>
 
 <div class="max-w-3xl mx-auto space-y-8">
+  <!-- Gym Profile Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Gym Profile</h2>
+      <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
+    </div>
+    <GymProfileSettings />
+  </section>
+
+  <!-- Connections Section (BYOT integrations, ADR-0006) -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Connections</h2>
+      <p class="text-sm text-surface-500 mt-1">Connect a device or app with your own access token to bring in HRV, resting heart rate and sleep — powering your daily Readiness.</p>
+    </div>
+    <Connections />
+  </section>
+
   <!-- Data Import Section -->
   <section>
     <div class="mb-4">
@@ -84,6 +98,24 @@
     </div>
   </section>
 
+  <!-- Fitbod Import Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Import from Fitbod</h2>
+      <p class="text-sm text-surface-500 mt-1">Bring your Fitbod workout history in as Sessions — it seeds your strength records and progression.</p>
+    </div>
+    <FitbodImport />
+  </section>
+
+  <!-- Data Export Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Export Your Data</h2>
+      <p class="text-sm text-surface-500 mt-1">Download everything you've logged and imported — your data, yours to keep.</p>
+    </div>
+    <ExportData />
+  </section>
+
   <!-- Account Section -->
   <section>
     <div class="mb-4">
@@ -108,26 +140,6 @@
             {auth.user?.created_at ? formatDate(auth.user.created_at, 'long') : '--'}
           </p>
         </div>
-      </div>
-
-      <!-- Logout -->
-      <div class="px-6 py-4">
-        <button
-          onclick={handleLogout}
-          disabled={loggingOut}
-          class="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30
-                 text-red-400 text-sm font-medium rounded-lg transition-colors
-                 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {#if loggingOut}
-            <span class="flex items-center gap-2">
-              <div class="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin"></div>
-              Signing out...
-            </span>
-          {:else}
-            Sign Out
-          {/if}
-        </button>
       </div>
     </div>
   </section>

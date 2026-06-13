@@ -3,7 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <link rel="icon" href="%sveltekit.assets%/favicon.png" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/x-icon" href="%sveltekit.assets%/favicon.ico" />
+  <!-- viewport-fit=cover lets the standalone PWA paint under the iOS notch/home
+       indicator; the layout pads with env(safe-area-inset-*). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <!-- PWA theme + iOS "Add to Home Screen" (ADR-0007). theme_color matches the
+       manifest; the web-manifest <link> itself is injected by the layout via
+       virtual:pwa-info so it tracks the hashed manifest filename. -->
+  <meta name="theme-color" content="#10b981" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Health" />
+  <link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />
+
   %sveltekit.head%
 </head>
 <body data-sveltekit-preload-data="hover">
