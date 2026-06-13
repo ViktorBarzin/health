@@ -50,7 +50,8 @@ backend/app/
 │   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
 │   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
 │   ├── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
-│   └── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
+│   ├── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
+│   └── nutrition.py  # /api/nutrition — Food catalog search + Diary CRUD + day view/history (#21)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -73,7 +74,9 @@ backend/app/
 │   ├── adjust_agent.py # Gated claude-agent-service adjust provider (proposes-only; falls back) (#14)
 │   ├── fitbod_parser.py # Pure Fitbod-CSV parser (by column NAME; kg/lb; warmup; group→Sessions; skip cardio) (#9)
 │   ├── matcher.py     # Pure exercise-name matcher (normalise + alias; unresolved→manual) (#9)
-│   └── fitbod_import.py # Fitbod import DB glue: preview + idempotent (Session-grain) commit + PRs + Source (#9)
+│   ├── fitbod_import.py # Fitbod import DB glue: preview + idempotent (Session-grain) commit + PRs + Source (#9)
+│   ├── nutrition.py   # Pure macro-totalling core (Σ Food per-serving macros × quantity; per-meal+day; round-once) (#21)
+│   └── seed_foods.py  # Idempotent generic whole-foods Food-catalog seed (in-code; upsert by slug) (#21)
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -102,6 +105,8 @@ backend/app/
 | `programs` | id (UUID) | partial-UNIQUE(user_id) WHERE status='active', (user_id) |
 | `program_days` | id (UUID) | UNIQUE(program_id, day_index) |
 | `program_muscle_volumes` | id | UNIQUE(program_id, muscle, week) |
+| `foods` | id (UUID) | partial-UNIQUE(slug) WHERE user_id IS NULL, partial-UNIQUE(user_id, slug) WHERE user_id IS NOT NULL, (user_id) |
+| `diary_entries` | id (UUID) | (user_id, entry_date) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -335,6 +340,39 @@ action (`GET /api/export`) streams a ZIP of ALL the caller's own data — the re
   **settings page**. YAGNI (ADR-0006): a full archive only — not per-type/selectable export, not scheduling, not
   read-scoped tokens (deferred).
 
+**Nutrition: Food diary + macros** (the MyFitnessPal core — CONTEXT.md "Food"/"Diary Entry"/"Meal"; #21). Two tables:
+- **`foods`** — the Food catalog, mirroring the Exercise library's shared+custom design: `user_id IS NULL` = a
+  **shared** Food (the generic whole-foods seed, and later the OFF cache, #22), non-NULL = a user's private custom Food
+  (#22); browse = global ∪ own. Macros are stored **per serving** (one serving = `serving_size` of `serving_unit`,
+  e.g. 100 "g" or 1 "egg") — NOT per-gram, so whole-unit foods ("1 egg", "1 slice", "1 medium") are first-class with no
+  density model. `source` (`generic`/`off`/`custom`) + nullable `off_id`/`brand` leave room for the OFF + custom slice
+  (#22, NOT built). Two partial unique indexes key `slug` per namespace (same NULL-distinct idiom as `exercises`).
+- **`diary_entries`** — a Food logged with a `quantity` to one `meal` (native enum breakfast/lunch/dinner/snack) of one
+  `entry_date` (a plain DATE — a Diary Entry is a *day*+Meal, not an instant), **private** to its `user_id` (UUID PK).
+- **Quantity semantics (documented decision):** `quantity` is the **number of servings** of the Food; an entry's macros
+  = the Food's per-serving macros × quantity. So a 100 g Food at quantity 1.5 → the 150 g values; "Egg, large" at 2 → two
+  eggs. The Food stays the single source of macro/unit truth; the entry only scales it.
+- **`services/nutrition.py` is the PURE macro-totalling core** (no DB/clock — mirrors `volume.py`/`effort.py`): `EntryMacros`
+  value objects → `daily_totals(entries)` → per-Meal + whole-day `MacroTotals`. Sums **unrounded then rounds once** to 1dp
+  (per-entry rounding never compounds; per-meal sums reconcile to the day total); empty day = all-zero with every Meal slot
+  present. Analytics/Budget (#23) reuse this exact definition. `api/nutrition.py` builds `EntryMacros` from ORM rows and
+  feeds the core — never re-deriving the sum.
+- **API** `/api/nutrition`: `GET /foods` (catalog search, visible = shared ∪ own), `GET /foods/{id}`, `POST/PATCH/DELETE
+  /entries` (Diary CRUD; a logged/swapped Food is visibility-checked → 404 if not visible, no leak), `GET /diary?date=`
+  (the day view: four Meal sections + subtotals + day total, all via the pure core; defaults to today), `GET
+  /history?start=&end=` (per-day totals for the charts; only days with entries; scoped to the caller). All `get_current_user`-scoped.
+- **Seed** `services/seed_foods.py` — ~25 generic whole foods authored in-code (like the Principles KB, not a vendored
+  file): idempotent upsert by `slug` among shared rows, never touches custom Foods, runs from `entrypoint.sh` after
+  migrations. Per-serving macros are Atwater-consistent (the seed test guards 4/4/9 kcal/g within tolerance).
+- **Export** already includes Diary Entries (it probes for the `diary_entries` table and streams it via runtime reflection
+  filtered on `user_id`); now that the table exists (#21) a user's diary round-trips through the archive.
+- **Frontend** `lib/nutrition.ts` (PURE view-logic, vitest `nutrition.test.ts`: `entryMacros` quantity-scaling mirror,
+  `formatMacro`/`formatServing`, `macroCalorieSplit` for the breakdown bar, `historyToSeries` → the chart `{time,value}`
+  shape) + `components/nutrition/AddEntrySheet.svelte` (mobile bottom-sheet: search Food → pick → quantity stepper + Meal
+  picker + live macro preview → save; also the edit flow) + routes `/nutrition` (day view: four Meals, entries, daily
+  total + macro split bar, add/edit/delete) and `/nutrition/history` (calories/macros over a trailing window, reusing
+  `BarChart`). Nav: "Nutrition" in the "More" sheet. YAGNI: no barcode/OFF/custom-Foods/Recipes/Budget (#22/#23).
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -368,6 +406,7 @@ frontend/src/
 │   ├── types.ts        # TypeScript interfaces
 │   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
 │   ├── fitbod.ts       # Pure looksLikeFitbodCsv header-sniff (reject wrong file pre-upload, vitest) (#9)
+│   ├── nutrition.ts    # Pure macro view-logic: scale/format/split + history→chart series (vitest) (#21)
 │   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
 │   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
 │   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
@@ -380,6 +419,7 @@ frontend/src/
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus, FitbodImport (CSV → preview → resolve → commit, #9)
 │   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
+│   │   ├── nutrition/  # AddEntrySheet (search Food → quantity + Meal → save/edit, #21)
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/
@@ -393,6 +433,8 @@ frontend/src/
     ├── exercises/new/+page.svelte   # Create custom exercise form
     ├── metrics/+page.svelte   # Available metrics
     ├── metrics/[type]/+page.svelte  # Metric drill-down
+    ├── nutrition/+page.svelte       # Food diary day view (four Meals, entries, daily total) (#21)
+    ├── nutrition/history/+page.svelte  # Calories/macros over time (reuses BarChart) (#21)
     ├── settings/+page.svelte  # Settings, import management
     ├── body/+page.svelte      # Body metrics
     ├── sleep/+page.svelte     # Sleep view
@@ -417,15 +459,16 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `b2c3d4e5f6a7`
-(`add goal-driven Programs`).
+Alembic migrations in `backend/alembic/versions/`. Current head: `c3d4e5f6a7b8`
+(`add nutrition Food catalog + Diary Entries`).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
-After migrations, `entrypoint.sh` runs two idempotent seeds (best-effort — a seed failure
+After migrations, `entrypoint.sh` runs three idempotent seeds (best-effort — a seed failure
 does not block boot), each runnable manually via the same `python -m` command:
 `app.services.seed_exercises` (the shared Exercise library from the vendored free-exercise-db
-dataset) and `app.services.seed_principles` (the cited Principles KB, ADR-0004).
+dataset), `app.services.seed_principles` (the cited Principles KB, ADR-0004), and
+`app.services.seed_foods` (the generic whole-foods Food catalog, #21).
 
 ## CI/CD
 

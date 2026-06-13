@@ -25,6 +25,8 @@ from app.models.program import (
     ProgramMuscleVolume,
     ProgramStatus,
 )
+from app.models.food import Food
+from app.models.diary_entry import DiaryEntry, Meal
 
 __all__ = [
     "User",
@@ -55,4 +57,7 @@ __all__ = [
     "ProgramDay",
     "ProgramMuscleVolume",
     "ProgramStatus",
+    "Food",
+    "DiaryEntry",
+    "Meal",
 ]

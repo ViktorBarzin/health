@@ -389,30 +389,57 @@ async def test_empty_record_type_yields_header_only_csv(client, db_session) -> N
     assert records["gym_profile"] is None
 
 
-async def test_export_succeeds_when_nutrition_tables_absent(
+async def test_export_includes_diary_entries_when_nutrition_tables_exist(
     client, db_session
 ) -> None:
-    """Diary Entries aren't built yet — the export must skip them, not 500.
+    """The Diary (nutrition, #21) round-trips through the export, per-user scoped.
 
-    The test schema has no nutrition tables, so this is the live case: the
-    archive completes and simply omits diary entries (or includes an empty
-    collection), without error.
+    The Export module probes for the ``diary_entries`` table and includes it when
+    present (ADR-0006). With the nutrition tables now built (#21), a user's own
+    Diary Entries appear in both JSON and CSV; another user's never do.
     """
-    alice = await _make_user(db_session, "alice@example.com")
-    await _seed_full_user(db_session, alice, marker="ALICE")
-    client.set_user(alice)
+    from app.models.diary_entry import DiaryEntry, Meal
+    from app.models.food import Food
 
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    await _seed_full_user(db_session, alice, marker="ALICE")
+    # A shared Food + a Diary Entry for each user.
+    food = Food(
+        slug="chicken-export", name="Chicken", user_id=None,
+        serving_size=100, serving_unit="g",
+        calories=165, protein_g=31, carbs_g=0, fat_g=3.6, source="generic",
+    )
+    db_session.add(food)
+    await db_session.flush()
+    db_session.add(DiaryEntry(
+        user_id=alice.id, food_id=food.id, entry_date=date(2026, 6, 13),
+        meal=Meal.lunch, quantity=1.5,
+    ))
+    db_session.add(DiaryEntry(
+        user_id=bob.id, food_id=food.id, entry_date=date(2026, 6, 13),
+        meal=Meal.dinner, quantity=2,
+    ))
+    await db_session.flush()
+
+    client.set_user(alice)
     resp = await client.get("/api/export")
     assert resp.status_code == 200
     members = _unzip(resp.content)
     import json
 
     records = json.loads(members["export.json"])["records"]
-    # diary_entries is either absent or an empty list — never a crash, never a
-    # populated diary (the tables don't exist).
-    assert records.get("diary_entries", []) == []
-    # No diary CSV is produced when the table doesn't exist.
-    assert "csv/diary_entries.csv" not in members
+    diary = records["diary_entries"]
+    # Only Alice's own entry — Bob's is never visible.
+    assert len(diary) == 1
+    assert diary[0]["user_id"] == alice.id
+    assert diary[0]["meal"] == "lunch"
+    assert float(diary[0]["quantity"]) == 1.5
+    # A diary CSV is produced (header + the one row).
+    assert "csv/diary_entries.csv" in members
+    csv_rows = list(csv.DictReader(io.StringIO(members["csv/diary_entries.csv"].decode())))
+    assert len(csv_rows) == 1
+    assert csv_rows[0]["meal"] == "lunch"
 
 
 # --- Streaming: the response is chunked, not one in-memory blob -------------

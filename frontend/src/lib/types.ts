@@ -478,6 +478,84 @@ export interface GenerateProgramRequest {
   session_minutes?: number;
 }
 
+// --- Nutrition: Food catalog + Diary (the MyFitnessPal core, #21) ---
+
+/** The four daily Meal slots a Diary Entry lands in (CONTEXT.md "Meal"). */
+export type Meal = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
+/** A bundle of macros (calories + the three macronutrients, grams). */
+export interface MacroTotals {
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+/** One catalog Food with per-serving macros (GET /api/nutrition/foods). */
+export interface Food {
+  id: string;
+  name: string;
+  brand: string | null;
+  /** One serving = `serving_size` of `serving_unit` (e.g. 100 "g", 1 "egg"). */
+  serving_size: number;
+  serving_unit: string;
+  // Macros for ONE serving.
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  is_custom: boolean;
+  source: string;
+}
+
+/** Payload to log a Food to a Meal of a day. `quantity` is number of servings. */
+export interface DiaryEntryCreate {
+  food_id: string;
+  entry_date: string; // YYYY-MM-DD
+  meal: Meal;
+  quantity?: number;
+}
+
+/** Payload to edit a Diary Entry (only sent fields change). */
+export interface DiaryEntryUpdate {
+  food_id?: string;
+  entry_date?: string;
+  meal?: Meal;
+  quantity?: number;
+}
+
+/** One Diary Entry, with its computed (per-serving × quantity) macros. */
+export interface DiaryEntry {
+  id: string;
+  food_id: string;
+  food_name: string;
+  brand: string | null;
+  entry_date: string;
+  meal: Meal;
+  quantity: number;
+  serving_size: number;
+  serving_unit: string;
+  // The entry's macros = the Food's per-serving macros × quantity.
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+/** One Meal's entries plus its subtotal, for the day view. */
+export interface MealSection {
+  meal: Meal;
+  entries: DiaryEntry[];
+  totals: MacroTotals;
+}
+
+/** A whole day's diary: the four Meal sections and the day total. */
+export interface DiaryDay {
+  entry_date: string;
+  meals: MealSection[];
+  total: MacroTotals;
+}
+
 // --- Fitbod CSV import (#9) ---
 
 /** A Fitbod exercise name that auto-matched to a library Exercise. */

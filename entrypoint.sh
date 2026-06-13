@@ -16,6 +16,11 @@ python -m app.services.seed_exercises || echo "WARN: exercise library seed faile
 # edits flow through. Best-effort: a seed failure must not stop the app serving.
 python -m app.services.seed_principles || echo "WARN: principles KB seed failed; continuing"
 
+# Seed the generic whole-foods Food catalog (the nutrition starter set, #21).
+# Idempotent (upsert by slug among shared rows), so it is safe to run on every
+# boot and corrections flow through. Best-effort: a seed failure must not block.
+python -m app.services.seed_foods || echo "WARN: generic foods seed failed; continuing"
+
 # Start backend in background
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 

@@ -27,6 +27,9 @@ export const NAV_ITEMS: NavItem[] = [
   // Training analytics (#10): per-muscle Recovery + volume heatmap and e1RM
   // strength trends. Lives in the "More" sheet alongside the other insights.
   { href: '/analytics', label: 'Progress', icon: 'M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z' },
+  // Nutrition (#21, MyFitnessPal core): the food diary + macros. In the "More"
+  // sheet. Icon: a fork/utensils glyph.
+  { href: '/nutrition', label: 'Nutrition', icon: 'M3 3v6.75A2.25 2.25 0 005.25 12H6m0-9v18m0-9h.75A2.25 2.25 0 009 9.75V3M15 3c-1.243 0-2.25 1.612-2.25 3.6 0 1.658.7 3.052 1.65 3.464.37.16.6.534.6.936V21m3-18v18' },
   { href: '/trends', label: 'Trends', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
   { href: '/sleep', label: 'Sleep', icon: 'M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z' },
   { href: '/body', label: 'Body', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },

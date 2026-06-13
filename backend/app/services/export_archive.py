@@ -500,10 +500,11 @@ async def _gym_profile_dict(
     }
 
 
-# Optional nutrition record types (ADR-0006: Diary Entries). Built later; the
-# Export includes them only if the table exists, else skips gracefully. Declared
-# as (archive_name, table_name) so we can probe the live schema without importing
-# a model that may not exist yet.
+# Optional nutrition record types (ADR-0006: Diary Entries). Built in #21; the
+# Export includes them when the table exists and still skips gracefully when it
+# doesn't (e.g. a pre-#21 schema, or the export's own test fixtures). Declared as
+# (archive_name, table_name) and streamed via runtime reflection so the engine
+# needn't import a model that may be absent.
 _OPTIONAL_TABLES: tuple[tuple[str, str], ...] = (
     ("diary_entries", "diary_entries"),
 )

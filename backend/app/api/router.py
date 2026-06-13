@@ -12,6 +12,7 @@ from app.api.fitbod import router as fitbod_router
 from app.api.gym_profile import router as gym_profile_router
 from app.api.ingestion import router as ingestion_router
 from app.api.metrics import router as metrics_router
+from app.api.nutrition import router as nutrition_router
 from app.api.principles import router as principles_router
 from app.api.programs import router as programs_router
 from app.api.readiness import router as readiness_router
@@ -44,4 +45,7 @@ router.include_router(
 router.include_router(programs_router, prefix="/api/programs", tags=["programs"])
 router.include_router(
     readiness_router, prefix="/api/readiness", tags=["readiness"]
+)
+router.include_router(
+    nutrition_router, prefix="/api/nutrition", tags=["nutrition"]
 )
