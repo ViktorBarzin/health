@@ -42,7 +42,8 @@ backend/app/
 │   ├── metrics.py    # /api/metrics — available metrics + time-series queries
 │   ├── workouts.py   # /api/workouts — list/detail with route points
 │   ├── activity.py   # /api/activity — activity rings
-│   └── ingestion.py  # /api/import — upload/status/cancel/delete
+│   ├── ingestion.py  # /api/import — upload/status/cancel/delete
+│   └── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -52,7 +53,9 @@ backend/app/
 ├── schemas/       # Pydantic request/response models
 ├── services/
 │   ├── xml_parser.py  # Producer-consumer XML parsing pipeline
-│   └── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
+│   ├── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
+│   └── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
+├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
 └── main.py        # FastAPI app
@@ -70,6 +73,18 @@ backend/app/
 | `users` | id | UNIQUE(email) |
 | `data_sources` | id | UNIQUE(name, bundle_id) |
 | `import_batches` | id (UUID) | — |
+| `exercises` | id (UUID) | partial-UNIQUE(slug) WHERE user_id IS NULL, partial-UNIQUE(user_id, slug) WHERE user_id IS NOT NULL, (user_id) |
+| `exercise_muscles` | id | UNIQUE(exercise_id, muscle, role), (muscle) |
+
+**Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
+NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
+Exercise; browse = global ∪ own. Two partial unique indexes key the natural key `slug`
+separately per namespace (NULLs compare distinct in a plain unique). Muscle mappings are
+normalized in `exercise_muscles` with `muscle` a native Postgres enum (17 dataset groups) +
+`role` enum (primary/secondary) — a GROUP-BY-able dimension for Recovery/volume analytics, not
+free text. Demo-video link = computed YouTube "proper form" search URL (no hosted video).
+Images = jsDelivr CDN URLs (no binaries vendored). API: `/api/exercises` (browse with
+search/muscle/equipment filters, detail, create-custom, `/muscles` + `/equipment` options).
 
 ## Ingestion Pipeline
 
@@ -115,6 +130,9 @@ frontend/src/
     ├── +page.svelte           # Dashboard (home)
     ├── workouts/+page.svelte  # Workout list
     ├── workouts/[id]/+page.svelte  # Workout detail + map
+    ├── exercises/+page.svelte       # Exercise library browse (search + muscle/equipment filters)
+    ├── exercises/[id]/+page.svelte  # Exercise detail (images, muscles, instructions, demo link)
+    ├── exercises/new/+page.svelte   # Create custom exercise form
     ├── metrics/+page.svelte   # Available metrics
     ├── metrics/[type]/+page.svelte  # Metric drill-down
     ├── settings/+page.svelte  # Settings, import management
@@ -138,9 +156,13 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `b8c2d4e6f0a1`.
+Alembic migrations in `backend/alembic/versions/`. Current head: `c9d3e5f7a2b4`.
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
+
+After migrations, `entrypoint.sh` also runs `python -m app.services.seed_exercises` to
+idempotently upsert the shared Exercise library from the vendored free-exercise-db dataset
+(best-effort — a seed failure does not block boot). Runnable manually with the same command.
 
 ## CI/CD
 
