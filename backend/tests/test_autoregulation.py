@@ -44,6 +44,7 @@ def _slot(
     floor: int = 2,
     ceiling: int = 8,
     user_edited: bool = False,
+    deload_sets: int | None = None,
 ) -> AdjustableSlot:
     """A generated slot with its per-week Principle volume bounds for the muscle."""
     return AdjustableSlot(
@@ -55,6 +56,7 @@ def _slot(
         sets_floor=floor,
         sets_ceiling=ceiling,
         user_edited=user_edited,
+        deload_sets=deload_sets,
     )
 
 
@@ -85,6 +87,24 @@ def test_strong_readiness_never_exceeds_ceiling() -> None:
     slots = [_slot(sets=8, ceiling=8)]
     result = autoregulate_day(slots, readiness=99.0, recovery={"chest": 100.0})
     assert result.slots[0].sets == 8
+
+
+def test_strong_readiness_never_raises_a_deloaded_slot() -> None:
+    # A slot whose generated volume is already at/below its Principle floor (a
+    # DELOAD week — planned recovery) must NOT be bumped on a strong, fresh day:
+    # subjective "feeling great" can't undo a scheduled deload.
+    slots = [_slot(sets=4, floor=6, ceiling=12)]  # 4 sets < floor 6 → deload-depth
+    result = autoregulate_day(slots, readiness=95.0, recovery={"chest": 95.0})
+    assert result.slots[0].sets == 4
+    assert result.adjusted is False
+
+
+def test_strong_readiness_does_not_raise_a_slot_exactly_at_floor() -> None:
+    # At the floor exactly (the lightest accumulation week) is still "at/below
+    # floor" — a strong day holds, it doesn't push it up.
+    slots = [_slot(sets=6, floor=6, ceiling=12)]
+    result = autoregulate_day(slots, readiness=95.0, recovery={"chest": 95.0})
+    assert result.slots[0].sets == 6
 
 
 def test_moderate_readiness_leaves_plan_unchanged() -> None:
@@ -230,7 +250,66 @@ def test_strong_readiness_reason_is_positive() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Early deload (fatigue-triggered)
+# Early deload ACTS — it cuts the day to deload depth (not just a normal trim)
+# --------------------------------------------------------------------------- #
+
+
+def test_early_deload_cuts_day_to_deload_depth() -> None:
+    # A sustained-low stretch fired the trigger → cut each slot to its supplied
+    # deload-depth target (4), deeper than the normal per-readiness trim and well
+    # below the generated 12 sets.
+    slots = [_slot(sets=12, floor=6, ceiling=12, deload_sets=4)]
+    result = autoregulate_day(
+        slots, readiness=40.0, recovery={"chest": 80.0}, early_deload=True
+    )
+    assert result.slots[0].sets == 4
+    assert result.early_deload is True
+    assert result.adjusted is True
+    assert "deload" in result.reason.lower()
+
+
+def test_early_deload_is_deeper_than_a_normal_trim() -> None:
+    # The same poor-readiness day cuts FURTHER under an early deload than the
+    # ordinary per-readiness trim would — the flag actually changes the dose.
+    base = _slot(sets=12, floor=6, ceiling=12, deload_sets=4)
+    normal = autoregulate_day([base], readiness=40.0, recovery={"chest": 80.0})
+    deload = autoregulate_day(
+        [base], readiness=40.0, recovery={"chest": 80.0}, early_deload=True
+    )
+    assert deload.slots[0].sets < normal.slots[0].sets
+
+
+def test_early_deload_falls_back_to_floor_without_a_target() -> None:
+    # No deload_sets supplied → fall back to the Principle floor (still a real cut).
+    slots = [_slot(sets=12, floor=6, ceiling=12, deload_sets=None)]
+    result = autoregulate_day(
+        slots, readiness=None, recovery={}, early_deload=True
+    )
+    assert result.slots[0].sets == 6
+
+
+def test_early_deload_never_overrides_user_edits() -> None:
+    # The cardinal invariant holds even under an early deload: a user-edited slot
+    # is untouched.
+    slots = [_slot(sets=12, floor=6, ceiling=12, deload_sets=4, user_edited=True)]
+    result = autoregulate_day(
+        slots, readiness=30.0, recovery={"chest": 30.0}, early_deload=True
+    )
+    assert result.slots[0].sets == 12
+
+
+def test_early_deload_never_raises_a_light_slot() -> None:
+    # If the generated value is already below the deload target, the deload only
+    # ever reduces — never raises it up to the target.
+    slots = [_slot(sets=3, floor=6, ceiling=12, deload_sets=5)]
+    result = autoregulate_day(
+        slots, readiness=None, recovery={}, early_deload=True
+    )
+    assert result.slots[0].sets == 3
+
+
+# --------------------------------------------------------------------------- #
+# Early deload (fatigue-triggered) — the trigger predicate
 # --------------------------------------------------------------------------- #
 
 

@@ -56,6 +56,11 @@ _TIRED_VOLUME_SCALE: float = 0.7
 #: The exercise cap a "shorter" request proposes (a typical short session).
 _SHORTER_MAX_EXERCISES: int = 3
 
+#: Upper bound on a proposed ``max_exercises`` — a single gym session, not an
+#: all-day plan (matches the recommendation route's ``_MAX_EXERCISES``). A
+#: provider can't propose an absurdly large cap.
+_DEFAULT_MAX_EXERCISES_CAP: int = 12
+
 
 @dataclass(frozen=True)
 class Adjustment:
@@ -89,12 +94,14 @@ class AdjustmentBounds:
     ``min_volume_scale`` / ``max_volume_scale`` bound how far volume may move (so
     a clamp keeps every slot inside its Principle band); ``available_equipment``
     is what the Gym Profile holds, so :func:`validate_adjustment` can refuse an
-    exclusion that would leave the user with nothing.
+    exclusion that would leave the user with nothing; ``max_exercises_cap`` is the
+    largest exercise-count cap a proposal may set (a single session, not all day).
     """
 
     min_volume_scale: float = _DEFAULT_MIN_VOLUME_SCALE
     max_volume_scale: float = _DEFAULT_MAX_VOLUME_SCALE
     available_equipment: list[str] = field(default_factory=list)
+    max_exercises_cap: int = _DEFAULT_MAX_EXERCISES_CAP
 
 
 class AdjustProvider(ABC):
@@ -226,7 +233,9 @@ def validate_adjustment(
     * ``volume_scale`` is clamped to ``[min_volume_scale, max_volume_scale]``;
     * an ``exclude_equipment`` that would remove **every** available implement is
       trimmed so at least one remains (a proposal can't empty the session);
-    * ``max_exercises`` is floored at 1 (or dropped if non-positive).
+    * ``max_exercises`` is dropped if non-positive, else clamped to
+      ``[1, max_exercises_cap]`` (symmetric to the volume clamp — a proposal can't
+      ask for an absurdly long session any more than an absurdly short one).
 
     Returns a new, bounded :class:`Adjustment`. This is the ADR-0002 boundary: no
     matter what a provider returns, only the clamped result is ever applied.
@@ -245,8 +254,8 @@ def validate_adjustment(
         exclude = [e for e in exclude if e.lower() != keep]
 
     max_exercises = adjustment.max_exercises
-    if max_exercises is not None and max_exercises < 1:
-        max_exercises = None
+    if max_exercises is not None:
+        max_exercises = None if max_exercises < 1 else min(max_exercises, bounds.max_exercises_cap)
 
     return replace(
         adjustment,

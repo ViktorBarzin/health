@@ -155,6 +155,22 @@ def test_validate_caps_max_exercises_to_at_least_one() -> None:
     assert validated.max_exercises is None or validated.max_exercises >= 1
 
 
+def test_validate_caps_max_exercises_at_the_ceiling() -> None:
+    # Symmetric to the volume clamp: an absurdly large cap is clamped to the
+    # session ceiling, so a proposal can't ask for an all-day plan.
+    bounds = AdjustmentBounds(max_exercises_cap=12)
+    proposed = Adjustment(max_exercises=99)
+    validated = validate_adjustment(proposed, bounds)
+    assert validated.max_exercises == 12
+
+
+def test_validate_leaves_a_reasonable_max_exercises_untouched() -> None:
+    bounds = AdjustmentBounds(max_exercises_cap=12)
+    proposed = Adjustment(max_exercises=4)
+    validated = validate_adjustment(proposed, bounds)
+    assert validated.max_exercises == 4
+
+
 # --------------------------------------------------------------------------- #
 # Application produces editable targets (never mutates in place)
 # --------------------------------------------------------------------------- #

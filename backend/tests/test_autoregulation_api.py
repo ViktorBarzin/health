@@ -214,6 +214,28 @@ async def test_strong_readiness_stays_within_ceiling(db_session) -> None:
     assert _chest_sets(strong) <= 12
 
 
+async def test_strong_readiness_does_not_raise_the_deload_week(db_session) -> None:
+    # CRUX (review Finding A): land a STRONG, fresh day ON the scheduled deload
+    # week (created 4 weeks ago → week 5 = deload, chest cut to 4 sets). A great
+    # subjective day must NOT bump a planned deload back up.
+    user = await _user(db_session)
+    await _gym(db_session, user)
+    await _exercise(db_session, "Bench Press", Muscle.chest)
+    program = await _ramping_program(
+        db_session, user, created_at=NOW - timedelta(weeks=4, days=1)
+    )
+    await db_session.flush()
+
+    strong = await recommend_from_program(
+        db_session, user.id, program, now=NOW, readiness=95.0
+    )
+    assert strong.is_deload is True
+    # The deload sits at 4 sets — strong readiness leaves it there, never raises it.
+    assert _chest_sets(strong) == 4
+    assert strong.autoregulation is not None
+    assert strong.autoregulation.adjusted is False
+
+
 # --------------------------------------------------------------------------- #
 # Endpoint: the reason + readiness surface in /today
 # --------------------------------------------------------------------------- #
@@ -319,3 +341,47 @@ async def test_sustained_low_readiness_flags_early_deload(client, db_session) ->
     client.set_user(user)
     body = (await client.get("/api/recommendations/today")).json()
     assert body["program"]["autoregulation"]["early_deload"] is True
+
+
+async def test_early_deload_actually_cuts_the_prescription(client, db_session) -> None:
+    # CRUX (review Finding B): a sustained-low stretch doesn't just SET a flag —
+    # today's prescription is cut to DELOAD magnitude (chest 4 sets, the program's
+    # deload-week depth), deeper than the normal poor-readiness floor (6). Program
+    # created 2 weeks ago → week 3 (planned chest 10).
+    user = await _user(db_session)
+    await _gym(db_session, user)
+    await _exercise(db_session, "Bench Press", Muscle.chest)
+    await _ramping_program(
+        db_session, user, created_at=datetime.now(timezone.utc) - timedelta(weeks=2)
+    )
+    now = datetime.now(timezone.utc)
+    for d in range(10, 30):
+        db_session.add(
+            HealthRecord(
+                time=now - timedelta(days=d),
+                user_id=user.id,
+                metric_type="HeartRateVariabilitySDNN",
+                value=60.0,
+                unit="ms",
+            )
+        )
+    for d in range(0, 6):
+        db_session.add(
+            HealthRecord(
+                time=now - timedelta(days=d, hours=6),
+                user_id=user.id,
+                metric_type="HeartRateVariabilitySDNN",
+                value=25.0,
+                unit="ms",
+            )
+        )
+    await db_session.flush()
+
+    client.set_user(user)
+    body = (await client.get("/api/recommendations/today")).json()
+    auto = body["program"]["autoregulation"]
+    assert auto["early_deload"] is True
+    chest = next(e for e in body["exercises"] if "chest" in e["primary_muscles"])
+    # Cut to the deload-week depth (4), below the normal per-readiness floor (6).
+    assert chest["target_sets"] == 4
+    assert "deload" in auto["reason"].lower()

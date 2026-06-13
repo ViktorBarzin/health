@@ -281,6 +281,27 @@ def _session_volume_bounds(program: Program) -> dict[str, tuple[int, int]]:
     return bounds
 
 
+def _session_deload_targets(program: Program) -> dict[str, int]:
+    """Per-muscle per-SESSION set count at **deload depth**, for an early deload.
+
+    Reuses the Program's *scheduled* deload week — the generator already cut each
+    muscle's weekly volume to deload depth (from the deload Principle's
+    ``deload_volume_reduction_percent``) on the ``is_deload`` rows — and converts
+    that weekly target to a per-session count via the same ``sets_for_slot`` split.
+    So a fatigue-triggered early deload cuts the day to exactly the same magnitude
+    the calendar deload would, staying within Principle bounds (ADR-0004); no
+    re-deriving the percent here keeps a single source of the deload depth.
+    """
+    per_week = _times_trained_per_week(program)
+    targets: dict[str, int] = {}
+    for v in program.muscle_volumes:
+        if not v.is_deload:
+            continue
+        times = per_week.get(v.muscle, 1)
+        targets[v.muscle] = max(1, sets_for_slot(v.target_sets, times))
+    return targets
+
+
 async def _recovery_map(
     db: AsyncSession, user_id: int, *, now: dt.datetime
 ) -> dict[str, float]:
@@ -355,6 +376,7 @@ async def recommend_from_program(
     is_deload = any(v.is_deload for v in volume.values())
     per_week = _times_trained_per_week(program)
     bounds = _session_volume_bounds(program)
+    deload_targets = _session_deload_targets(program)
 
     available = await _equipment(db, user_id)
     history = await _latest_history(db, user_id, now=now)
@@ -398,7 +420,13 @@ async def recommend_from_program(
             slot_muscles.append(muscle)
 
     autoregulation = _autoregulate(
-        chosen, slot_muscles, bounds, readiness=readiness, recovery=recovery
+        chosen,
+        slot_muscles,
+        bounds,
+        deload_targets,
+        readiness=readiness,
+        recovery=recovery,
+        early_deload=early_deload,
     )
     chosen = _apply_adjustment(chosen, autoregulation)
 
@@ -421,18 +449,22 @@ def _autoregulate(
     chosen: list[RecommendedExercise],
     slot_muscles: list[str],
     bounds: dict[str, tuple[int, int]],
+    deload_targets: dict[str, int],
     *,
     readiness: float | None,
     recovery: dict[str, float],
+    early_deload: bool = False,
 ) -> AdjustmentResult:
     """Run the pure autoregulator over the generated slots.
 
     Builds one :class:`~app.services.autoregulation.AdjustableSlot` per chosen
-    Exercise — keyed by its **slot muscle** (so the per-muscle Recovery and the
-    Principle volume bounds apply correctly) — and adjusts the day. The slots come
-    straight from the generator (none user-edited here: this is the engine's own
-    proposal, and the start path lets the user's later edits win by simply
-    overwriting the instantiated Sets, per #11's design).
+    Exercise — keyed by its **slot muscle** (so the per-muscle Recovery, the
+    Principle volume bounds, and the per-muscle deload-depth target apply
+    correctly) — and adjusts the day. ``early_deload`` cuts the day to deload depth
+    (a fatigue-triggered early deload). The slots come straight from the generator
+    (none user-edited here: this is the engine's own proposal, and the start path
+    lets the user's later edits win by simply overwriting the instantiated Sets,
+    per #11's design).
     """
     slots = [
         AdjustableSlot(
@@ -444,10 +476,13 @@ def _autoregulate(
             sets_floor=bounds.get(muscle, (1, ex.target_sets))[0],
             sets_ceiling=bounds.get(muscle, (1, ex.target_sets))[1],
             user_edited=False,
+            deload_sets=deload_targets.get(muscle),
         )
         for ex, muscle in zip(chosen, slot_muscles)
     ]
-    return autoregulate_day(slots, readiness=readiness, recovery=recovery)
+    return autoregulate_day(
+        slots, readiness=readiness, recovery=recovery, early_deload=early_deload
+    )
 
 
 def _apply_adjustment(

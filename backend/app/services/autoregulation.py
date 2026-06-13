@@ -117,6 +117,12 @@ class AdjustableSlot:
     sets_floor: int
     sets_ceiling: int
     user_edited: bool = False
+    #: The per-session deload-depth set count for this muscle (``round(week-1
+    #: floor·(1−deload_volume%/100))``, the same cut the Program's *scheduled*
+    #: deload uses), supplied by the query layer that knows the deload Principle.
+    #: Used only when a **fatigue-triggered early deload** fires; ``None`` ⇒ the
+    #: caller couldn't derive it (fall back to the Principle floor).
+    deload_sets: int | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,8 @@ class AdjustmentResult:
     ``reason`` is the plain-English explanation the UI shows ("Readiness 48/100 —
     HRV below your baseline; trimmed top sets"); empty when nothing changed and
     readiness was unremarkable. ``readiness`` echoes the signal used (or ``None``).
+    ``early_deload`` is true when a fatigue-triggered early deload was applied
+    (the prescription was cut to deload depth).
     """
 
     slots: tuple[AdjustableSlot, ...]
@@ -134,6 +142,7 @@ class AdjustmentResult:
     reason: str
     readiness: float | None = None
     trimmed_muscles: tuple[str, ...] = field(default_factory=tuple)
+    early_deload: bool = False
 
 
 def _readiness_factor(readiness: float | None) -> float:
@@ -176,6 +185,34 @@ def _trim_floor(slot: AdjustableSlot) -> int:
     return max(1, min(slot.sets_floor, slot.sets))
 
 
+def _deload_slot(slot: AdjustableSlot) -> AdjustableSlot:
+    """Cut a slot to **deload depth** for a fatigue-triggered early deload.
+
+    Uses the caller-supplied :attr:`AdjustableSlot.deload_sets` (the same
+    ``round(floor·(1−deload_volume%/100))`` cut the Program's *scheduled* deload
+    uses, from the deload Principle) when present, else the Principle floor — and
+    never below one working set, never *above* the generated value (a deload only
+    ever reduces). User-edited slots are returned untouched.
+    """
+    if slot.user_edited:
+        return slot
+    target = slot.deload_sets if slot.deload_sets is not None else slot.sets_floor
+    target = max(1, min(target, slot.sets))
+    return replace(slot, sets=target)
+
+
+def _is_at_or_below_floor(slot: AdjustableSlot) -> bool:
+    """Whether the slot's generated volume is already at/below its Principle floor.
+
+    Such a slot is a deliberate cut below the accumulation band — a **deload** week,
+    or a muscle the generator already floored — so autoregulation must not *raise*
+    it on a strong day (the symmetric guard to :func:`_trim_floor`'s never-raise on
+    a trim). A scheduled deload is planned recovery and is never undone by daily
+    subjective feel.
+    """
+    return slot.sets <= slot.sets_floor
+
+
 def _adjust_slot(
     slot: AdjustableSlot,
     *,
@@ -191,7 +228,8 @@ def _adjust_slot(
       :func:`_trim_floor` (so a trim can't go below the Principle floor *nor*
       raise an already-reduced deload value);
     * a **strong, fresh** day bumps sets up by a small factor, clamped no higher
-      than the Principle ceiling (and never below the generated value);
+      than the Principle ceiling (and never below the generated value) — but a
+      slot already at/below its floor (a deload) is **never** bumped;
     * otherwise (factor ≈ 1, unremarkable readiness) the slot is unchanged.
     """
     if slot.user_edited:
@@ -199,11 +237,15 @@ def _adjust_slot(
 
     muscle_recovery = recovery.get(slot.muscle)
 
-    # Strong, fresh day: allow a small bump, capped at the ceiling.
+    # Strong, fresh day: allow a small bump, capped at the ceiling — UNLESS the
+    # slot is already at/below its Principle floor (a deload week / floored
+    # muscle), which planned recovery must keep intact (symmetric to a trim never
+    # raising one).
     if (
         readiness is not None
         and readiness >= _STRONG_AT
         and (muscle_recovery is None or muscle_recovery >= _RECOVERY_FULL_AT)
+        and not _is_at_or_below_floor(slot)
     ):
         target = int(round(slot.sets * _STRONG_BONUS_FACTOR))
         target = min(target, max(slot.sets_ceiling, slot.sets))
@@ -223,8 +265,20 @@ def _build_reason(
     readiness: float | None,
     trimmed: list[str],
     raised: bool,
+    *,
+    early_deload: bool = False,
 ) -> tuple[bool, str]:
     """Compose the human-readable reason. Returns ``(adjusted, reason)``."""
+    if early_deload:
+        head = (
+            f"Readiness {round(readiness)}/100 — "
+            if readiness is not None
+            else ""
+        )
+        return True, (
+            f"{head}sustained low readiness — early deload, volume cut to let "
+            f"fatigue clear."
+        )
     if trimmed:
         muscles = ", ".join(trimmed)
         if readiness is not None:
@@ -255,19 +309,26 @@ def autoregulate_day(
     *,
     readiness: float | None,
     recovery: dict[str, float],
+    early_deload: bool = False,
 ) -> AdjustmentResult:
     """Autoregulate the day's slots on Readiness + per-muscle Recovery.
 
-    Trims (or, on a strong fresh day, slightly raises) each *generated* slot's
-    set count within its Principle bounds; **user-edited slots pass through
-    untouched**. Emits a plain-English reason mentioning the readiness number when
-    it trims. Deterministic — pure function of its inputs.
+    When ``early_deload`` is set (the caller's
+    :func:`early_deload_triggered` fired on a sustained low-Readiness stretch),
+    every *generated* slot is cut to **deload depth** (:func:`_deload_slot`) —
+    actual planned recovery, not just the normal per-readiness trim — with the
+    reason shown. Otherwise it trims (or, on a strong fresh day, slightly raises)
+    each generated slot within its Principle bounds. **User-edited slots pass
+    through untouched** either way. Deterministic — pure function of its inputs.
     """
     adjusted_slots: list[AdjustableSlot] = []
     trimmed: list[str] = []
     raised = False
     for slot in slots:
-        new = _adjust_slot(slot, readiness=readiness, recovery=recovery)
+        if early_deload:
+            new = _deload_slot(slot)
+        else:
+            new = _adjust_slot(slot, readiness=readiness, recovery=recovery)
         adjusted_slots.append(new)
         if slot.user_edited:
             continue
@@ -276,13 +337,16 @@ def autoregulate_day(
         elif new.sets > slot.sets:
             raised = True
 
-    adjusted, reason = _build_reason(readiness, trimmed, raised)
+    adjusted, reason = _build_reason(
+        readiness, trimmed, raised, early_deload=early_deload
+    )
     return AdjustmentResult(
         slots=tuple(adjusted_slots),
         adjusted=adjusted,
         reason=reason,
         readiness=readiness,
         trimmed_muscles=tuple(dict.fromkeys(trimmed)),
+        early_deload=early_deload,
     )
 
 
