@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.activity import router as activity_router
+from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.exercises import router as exercises_router
@@ -21,3 +22,4 @@ router.include_router(activity_router, prefix="/api/activity", tags=["activity"]
 router.include_router(ingestion_router, prefix="/api/import", tags=["import"])
 router.include_router(exercises_router, prefix="/api/exercises", tags=["exercises"])
 router.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
+router.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
