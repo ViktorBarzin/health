@@ -397,7 +397,12 @@ PRINCIPLES: tuple[PrincipleSeed, ...] = (
         evidence_grade=EvidenceGrade.C,
         params={
             "weeks_between_deloads": {"min": 4, "max": 8, "unit": "weeks"},
+            # Two DISTINCT levers a deload can pull (Bell 2022 describes coaches
+            # cutting volume, load, or both). The Program generator reduces set
+            # COUNT, so it reads the *volume* param — never the load one — so the
+            # provenance receipt honestly cites a volume reduction.
             "deload_load_reduction_percent": {"min": 40, "max": 60, "unit": "%"},
+            "deload_volume_reduction_percent": {"min": 30, "max": 50, "unit": "%"},
         },
         goals=[],
         experience_levels=[],
@@ -405,9 +410,11 @@ PRINCIPLES: tuple[PrincipleSeed, ...] = (
             "Evidence is limited and indirect: Bell et al. 2022 is qualitative "
             "research on how strength/physique coaches use deloads (fatigue "
             "management, injury/burnout reduction), not an outcome RCT. Grade C. "
-            "The 4-8 week cadence and ~40-60% load reduction reflect common coach "
-            "practice described there and standard mesocycle structure, not a "
-            "measured optimum."
+            "Coaches deload by cutting volume and/or load; the ~30-50% volume "
+            "reduction and ~40-60% load reduction, and the 4-8 week cadence, "
+            "reflect that common practice and standard mesocycle structure, not a "
+            "measured optimum. The generator reduces set count, so it uses the "
+            "volume-reduction param."
         ),
         citations=(
             CitationSeed(

@@ -347,3 +347,80 @@ async def test_start_today_instantiates_session_from_program(client, db_session)
     got = await client.get(f"/api/sessions/{body['id']}")
     assert got.status_code == 200
     assert got.json()["set_count"] == 4
+
+
+# --------------------------------------------------------------------------- #
+# GENERATOR-LEVEL deload e2e: a Program generated from the REAL KB prescribes
+# fewer sets on the deload week than on week 1 (catches the "invisible deload"
+# bug that hand-built-row tests missed).
+# --------------------------------------------------------------------------- #
+
+
+async def test_generated_program_deload_prescribes_fewer_sets_than_week_one(
+    db_session,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.principle import ExperienceLevel, TrainingGoal
+    from app.services.program_generation import QuizInput
+    from app.services.program_query import create_program_from_quiz
+    from app.services.program_recommendation import recommend_from_program
+    from app.services.seed_principles import seed_principles
+
+    # Seed the REAL KB and generate a real Program (no hand-built volume rows).
+    await seed_principles(db_session)
+    alice = await _user(db_session)
+    # A chest movement so the Push day's chest slot fills.
+    await _exercise(db_session, "Bench Press", Muscle.chest)
+
+    created = datetime.now(timezone.utc)
+    program = await create_program_from_quiz(
+        db_session,
+        alice.id,
+        QuizInput(
+            goal=TrainingGoal.bulk,
+            experience=ExperienceLevel.intermediate,
+            days_per_week=4,
+            session_minutes=70,
+        ),
+    )
+    # Sanity: the generator produced a real ramp with a deload below week 1.
+    chest_week1 = next(
+        v.target_sets
+        for v in program.muscle_volumes
+        if v.muscle == Muscle.chest.value and v.week == 1
+    )
+    chest_deload = next(
+        v.target_sets
+        for v in program.muscle_volumes
+        if v.muscle == Muscle.chest.value and v.is_deload
+    )
+    assert chest_deload < chest_week1, (chest_deload, chest_week1)
+
+    # Drive the Recommendation at week 1 (the day the Program started) and at the
+    # deload week (created_at + (total_weeks-1) full weeks), injecting `now`. The
+    # day_index is 0 both times (no Sessions logged), so it's the SAME Push day —
+    # only the week differs — making the set counts directly comparable.
+    week1 = await recommend_from_program(db_session, alice.id, program, now=created)
+    deload_now = created + timedelta(weeks=program.total_weeks - 1)
+    deload = await recommend_from_program(
+        db_session, alice.id, program, now=deload_now
+    )
+
+    assert week1.is_deload is False
+    assert deload.is_deload is True
+    assert deload.day_name == week1.day_name  # same due day, different week
+
+    def chest_sets(rec) -> int:
+        return next(
+            e.target_sets
+            for e in rec.recommendation.exercises
+            if "chest" in e.primary_muscles
+        )
+
+    # The CRUX: the driven Recommendation prescribes fewer chest sets on the deload
+    # week than on week 1 — the deload is visible end-to-end through the generator.
+    assert chest_sets(deload) < chest_sets(week1), (
+        chest_sets(deload),
+        chest_sets(week1),
+    )

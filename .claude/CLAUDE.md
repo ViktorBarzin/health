@@ -169,18 +169,31 @@ experience, days/week, session length) + the Principles applicable to `(goal, ex
 `GeneratedProgram`. **Every numeric parameter is derived from a Principle's `params` range** (pick rule:
 midpoint-rounded-clamped for a `{min,max}`, direct read for a `{value}`; effort = top of the RIR range)
 and recorded in a **`provenance`** receipt `{param: {principle_key, value, unit, min?, max?}}` so #14 can
-show "why this number"; a missing required Principle **raises** rather than inventing a number. The split
-shape comes from `services/program_templates.py` (full-body / upper-lower / PPL keyed by days/week — generic
-structures, no copyrighted text; authored to meet the ≥2×/week frequency floor); the **preset catalog**
-(`services/program_presets.py`: GZCLP, Upper/Lower, PPL, 5/3/1-style) is just **pinned `QuizInput`s fed
-through the same generator** — numbers still from Principles. Persistence (`services/program_query.py`) is
-three tables (`programs` header + `provenance` JSONB; `program_days` split slots; `program_muscle_volumes`
-the **ramping** weekly per-muscle target that drops on the scheduled **deload** week) with **one active
-Program per user** (partial unique index `WHERE status='active'`; generating archives the prior, kept not
-deleted). The daily Recommendation path (#11) is extended: `recommendation_query.recommend_today` →
-`services/program_recommendation.py` when a Program is active (today = the Program's next due day —
-`(#Sessions since created) mod days/week` — its slots filled via the existing **Progression** core,
-constrained by the Gym Profile; deload week reduces sets), else the freestyle generator. Starting it reuses
+show "why this number"; a missing required Principle **raises** rather than inventing a number. Two
+honesty rules learned from a review: (1) the **deload** volume cut reads the deload rule's *volume* param
+(`deload_volume_reduction_percent`, a real cited param) — NOT its load param — and is anchored off the
+ramp's **week-1 floor** (`round(floor·(1−pct/100))`, clamped strictly below the floor) so the deload is
+clearly fewer sets than EVERY accumulation week (anchoring off the *top* made it land on the floor → an
+invisible deload); (2) `progressive-overload.load_increase_percent` is a percent the per-set engine
+(kg-based double-progression) doesn't apply, so it is **not** faked into the receipt. The mesocycle source
+(`periodization` vs the universal `deload` cadence) is decided by **whether `periodization` is in the
+injected applicable set** (the query layer's filter is the single source of its applicability — the
+generator never re-encodes it). The split shape comes from `services/program_templates.py` (full-body /
+upper-lower / PPL keyed by days/week — generic structures, no copyrighted text). Only **2×-compliant**
+splits are offered per day count (PPL needs ≥6 days; at 3 days only full-body — a PPL@3 would be 1×/week),
+and `generate_program` **asserts** the `training-frequency` floor on the BUILT split at runtime
+(`FrequencyFloorError`); the floor is enforced for `MAJOR_MUSCLES` (compound primary movers), and the
+session-length slot cap trims **accessories first** so a major muscle is never dropped below the floor. The
+**preset catalog** (`services/program_presets.py`: GZCLP, Upper/Lower, PPL, 5/3/1-style) is just **pinned
+`QuizInput`s fed through the same generator** — numbers still from Principles. Persistence
+(`services/program_query.py`) is three tables (`programs` header + `provenance` JSONB; `program_days` split
+slots; `program_muscle_volumes` the **ramping** weekly per-muscle target that drops on the scheduled
+**deload** week) with **one active Program per user** (partial unique index `WHERE status='active'`;
+generating archives the prior, kept not deleted). The daily Recommendation path (#11) is extended:
+`recommendation_query.recommend_today` → `services/program_recommendation.py` when a Program is active
+(today = the Program's next due day — `(#Sessions since created) mod days/week` — its slots filled via the
+existing **Progression** core, constrained by the Gym Profile; deload week reduces sets), else the freestyle
+generator. Starting it reuses
 #11's `instantiate_session` (a `Recommendation` of pre-filled Sets — no prescribed-state column). API
 `/api/programs` + `/api/recommendations/today[/start]`. Frontend: `/programs` (catalog + your Programs),
 `/programs/quiz`, `/programs/[id]` (overview: weeks/days/volume-ramp + provenance receipts),

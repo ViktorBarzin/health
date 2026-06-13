@@ -28,14 +28,24 @@ the generator **raises** (it will not invent a number) — a loud, correct failu
 
 The algorithm
 =============
-1. Read & record params (volume band, frequency floor, effort, mesocycle length,
-   deload timing + cut, goal rep range, load step).
+1. Read & record params: volume band, frequency floor, effort, mesocycle length
+   (from ``periodization`` when it applies to this context — i.e. is in the
+   injected set — else the universal ``deload`` cadence), deload **volume**
+   reduction (from the deload rule's *volume* param, not its load one), and the
+   goal rep range. The progression *scheme* is the double-progression core; its
+   per-set step is a kg increment the core owns, so no percent is faked into the
+   receipt.
 2. Choose the split from ``days_per_week`` (+ optional style) via
-   :mod:`app.services.program_templates`; cap each day's slots by the session-length
-   budget. The templates already satisfy the frequency floor.
+   :mod:`app.services.program_templates`; trim each day's slots to the
+   session-length budget **accessories-first** so a day's major-muscle slots are
+   always kept. Then **assert** the ``training-frequency`` floor on the BUILT split
+   (raises :class:`FrequencyFloorError` on any regression).
 3. Build the **ramping** weekly per-muscle volume: weeks ``1..mesocycle_weeks``
    linearly interpolate the volume floor → top (rounded, non-decreasing); the
-   trailing **deload** week cuts each muscle to ``round(top·(1−deload%/100))``.
+   trailing **deload** week cuts each muscle to clearly fewer sets than EVERY
+   accumulation week — anchored off the week-1 **floor**
+   (``round(floor·(1−deload_volume%/100))``, clamped strictly below the floor), so
+   the deload is never invisible.
 4. Emit a :class:`GeneratedProgram` — header + days + per-(muscle, week) volume.
 
 Determinism: no randomness, no clock; integer rounding is fixed, so the same quiz
@@ -50,7 +60,11 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.models.principle import ExperienceLevel, TrainingGoal
-from app.services.program_templates import SplitStyle, split_for
+from app.services.program_templates import (
+    MAJOR_MUSCLES,
+    SplitStyle,
+    split_for,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -155,6 +169,16 @@ class MissingPrincipleError(ValueError):
     """A required Principle (or param) is absent — refuse to invent a number."""
 
 
+class FrequencyFloorError(ValueError):
+    """A built split trains a major muscle below the frequency-Principle floor.
+
+    A guarantee, not an expected path: the authored templates meet the floor at
+    every supported day count and session length, so this only fires if a template
+    or the slot-capping ever regresses — failing loudly rather than shipping a
+    Program that violates ``training-frequency``.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Reading params from the injected Principles
 # --------------------------------------------------------------------------- #
@@ -226,21 +250,18 @@ _REP_PARAMS: dict[TrainingGoal, tuple[str, str]] = {
 }
 
 
-def _mesocycle_source(goal: TrainingGoal, experience: ExperienceLevel) -> str:
-    """Which Principle supplies the mesocycle length for this context.
+def _mesocycle_source(index: dict[str, dict]) -> str:
+    """Which Principle supplies the mesocycle length, per the KB's applicability.
 
-    ``periodization`` is the directly-evidenced source for strength/bulk at
-    intermediate+ experience (it carries ``mesocycle_weeks``); for everyone else
-    the block length falls to the ``deload`` cadence (``weeks_between_deloads``),
-    which applies universally. This mirrors the KB's own applicability (the
-    periodization rule is scoped to strength/bulk × intermediate/advanced).
+    The block length comes from ``periodization`` (``mesocycle_weeks``) when that
+    rule **applies** to this context, else from the universal ``deload`` cadence
+    (``weeks_between_deloads``). Crucially we do NOT re-encode periodization's
+    goal/experience applicability here (that would let code and KB diverge): the
+    query layer already filtered the injected Principles by ``(goal, experience)``,
+    so periodization is simply present in ``index`` iff it applies — read it if
+    present, fall back to ``deload`` otherwise.
     """
-    periodized_goal = goal in (TrainingGoal.strength, TrainingGoal.bulk)
-    periodized_exp = experience in (
-        ExperienceLevel.intermediate,
-        ExperienceLevel.advanced,
-    )
-    return "periodization" if (periodized_goal and periodized_exp) else "deload"
+    return "periodization" if "periodization" in index else "deload"
 
 
 def _slot_cap(session_minutes: int) -> int:
@@ -249,14 +270,39 @@ def _slot_cap(session_minutes: int) -> int:
     return max(_MIN_SLOTS_PER_DAY, min(_MAX_SLOTS_PER_DAY, raw))
 
 
+def _cap_day_muscles(muscles: tuple, slot_cap: int) -> list:
+    """Trim a day's muscles to the session-length budget, MAJORS-first.
+
+    A short session can't fit every slot, so we drop **accessory** muscles first
+    and keep ALL the day's *major* muscles — preserving each major muscle's weekly
+    frequency (the ``training-frequency`` floor) no matter how short the session.
+    Original day order is preserved among the muscles kept. If the day has more
+    majors than the cap, all majors are still kept (the floor wins over the cap —
+    a major muscle is never dropped to hit an arbitrary slot count).
+    """
+    if len(muscles) <= slot_cap:
+        return list(muscles)
+    majors = [m for m in muscles if m.value in MAJOR_MUSCLES]
+    accessories = [m for m in muscles if m.value not in MAJOR_MUSCLES]
+    room = max(0, slot_cap - len(majors))
+    kept = set(majors) | set(accessories[:room])
+    # Preserve the template's original within-day order.
+    return [m for m in muscles if m in kept]
+
+
 def _build_days(
     days_per_week: int, style: SplitStyle | None, slot_cap: int
 ) -> tuple[GeneratedDay, ...]:
-    """Realise the split template into days, capping each day's slots."""
+    """Realise the split template into days, capping each day's slots majors-first.
+
+    Session length trims accessory slots first (``_cap_day_muscles``); a day's
+    major-muscle slots are always kept, so the frequency floor survives any
+    session length.
+    """
     template = split_for(days_per_week, style)
     days: list[GeneratedDay] = []
     for i, day in enumerate(template):
-        muscles = day.muscles[:slot_cap]
+        muscles = _cap_day_muscles(day.muscles, slot_cap)
         slots = [{"muscle": m.value} for m in muscles]
         days.append(GeneratedDay(day_index=i, name=day.name, slots=slots))
     return tuple(days)
@@ -271,6 +317,29 @@ def _trained_muscles(days: tuple[GeneratedDay, ...]) -> list[str]:
             if m not in seen:
                 seen.append(m)
     return seen
+
+
+def _major_frequencies(days: tuple[GeneratedDay, ...]) -> dict[str, int]:
+    """How many built days train each MAJOR muscle (one count per day max)."""
+    counts: dict[str, int] = {}
+    for d in days:
+        majors_today = {
+            slot["muscle"] for slot in d.slots if slot["muscle"] in MAJOR_MUSCLES
+        }
+        for m in majors_today:
+            counts[m] = counts.get(m, 0) + 1
+    return counts
+
+
+def _assert_frequency_floor(days: tuple[GeneratedDay, ...], freq_min: int) -> None:
+    """Raise if any major muscle the split trains is hit < ``freq_min`` times/week."""
+    counts = _major_frequencies(days)
+    below = {m: n for m, n in counts.items() if n < freq_min}
+    if below:
+        raise FrequencyFloorError(
+            f"split trains major muscle(s) below the {freq_min}x/week frequency "
+            f"floor: {below}"
+        )
 
 
 def _ramp(
@@ -369,7 +438,7 @@ def generate_program(
     )
 
     # --- Mesocycle length --------------------------------------------------- #
-    meso_key = _mesocycle_source(quiz.goal, quiz.experience)
+    meso_key = _mesocycle_source(index)
     meso_param = (
         "mesocycle_weeks" if meso_key == "periodization" else "weeks_between_deloads"
     )
@@ -379,10 +448,17 @@ def generate_program(
         meso_key, meso_entry, mesocycle_weeks
     )
 
-    # --- Deload (timing comes from the meso length; volume cut from deload) -- #
-    deload_cut = _param(index, "deload", "deload_load_reduction_percent")
+    # --- Deload (timing from the meso length; VOLUME cut from the deload rule) #
+    # Read the deload's *volume*-reduction param (not the load one) since the
+    # generator reduces set COUNT — so the provenance honestly cites a volume
+    # derivation. Anchor the reduction off the ramp's FLOOR (vol_start, week 1),
+    # not the top, so the deload prescribes clearly fewer sets than EVERY
+    # accumulation week (the top-anchored version coincided with the floor and was
+    # invisible). Clamp strictly below the floor (>=1) so a deload always deloads.
+    deload_cut = _param(index, "deload", "deload_volume_reduction_percent")
     deload_pct = _midpoint_int(deload_cut)
-    deload_sets = max(1, int(round(vol_top * (1 - deload_pct / 100.0))))
+    deload_sets = int(round(vol_start * (1 - deload_pct / 100.0)))
+    deload_sets = max(1, min(deload_sets, vol_start - 1))
     provenance["deload_volume_reduction_percent"] = _provenance_entry(
         "deload", deload_cut, deload_pct
     )
@@ -400,16 +476,29 @@ def generate_program(
         "rep-scheme", high_entry, rep_high
     )
 
-    # --- Load progression step (recorded; the per-set load comes from the
-    #     Progression core at recommendation time) -------------------------- #
-    load_step = _param(index, "progressive-overload", "load_increase_percent")
-    provenance["load_increase_percent"] = _provenance_entry(
-        "progressive-overload", load_step, _midpoint_int(load_step)
-    )
+    # --- Progression scheme ------------------------------------------------- #
+    # The Program progresses each lift via the existing double-progression core
+    # (services/progression.py): hold the load, add reps within the range, then add
+    # a small load step at the top. We do NOT record progressive-overload's
+    # ``load_increase_percent`` in the provenance receipt: that param is a PERCENT,
+    # but the per-set step the engine actually applies is the kg increment the
+    # Progression core owns (a % can't become a fixed kg until recommendation time,
+    # against a real working weight). Advertising the % as a derived number would
+    # be a receipt the engine doesn't honour — exactly the dishonesty ADR-0004
+    # forbids — so the progression scheme is documented here, not faked as a
+    # numeric receipt. (Require the Principle to exist so a goal still composes
+    # only from a present KB, but derive no fabricated number from it.)
+    _param(index, "progressive-overload", "load_increase_percent")
 
     # --- Split + per-muscle ramp -------------------------------------------- #
     slot_cap = _slot_cap(quiz.session_minutes)
     days = _build_days(quiz.days_per_week, quiz.style, slot_cap)
+    # Enforce the training-frequency floor on the BUILT split (post slot-capping —
+    # that's what's actually prescribed): every MAJOR muscle the split trains must
+    # be hit >= freq_min times/week. The templates are authored to satisfy this and
+    # capping keeps majors, so this never fires for valid input — but it makes the
+    # docstring's promise real, failing loudly on any future regression.
+    _assert_frequency_floor(days, freq_min)
     muscles = _trained_muscles(days)
     muscle_volumes = _ramp(
         muscles,

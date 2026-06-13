@@ -55,6 +55,7 @@ _LEGS = (Muscle.quadriceps, Muscle.hamstrings, Muscle.glutes, Muscle.calves)
 _UPPER = (
     Muscle.chest,
     Muscle.lats,
+    Muscle.middle_back,
     Muscle.shoulders,
     Muscle.biceps,
     Muscle.triceps,
@@ -78,18 +79,18 @@ def _full_body(n: int) -> tuple[DayTemplate, ...]:
     )
 
 
-# Authored templates keyed by (days_per_week, style). Every entry trains each
-# major muscle >= 2x/week (the frequency floor) — pinned by a generation test.
+# Authored templates keyed by (days_per_week, style). EVERY entry trains each
+# muscle it touches >= 2x/week — the ``training-frequency`` floor — and
+# :func:`app.services.program_generation.generate_program` re-asserts that floor at
+# runtime against the chosen template (so a non-compliant template can never ship).
+# A split that can't meet 2x/week at a given day count is simply NOT offered: at
+# 3 days/week only full-body does (PPL@3 would train each muscle once), so PPL is
+# offered only where the day count supports 2x (>=6 days).
 _TEMPLATES: dict[tuple[int, SplitStyle], tuple[DayTemplate, ...]] = {
     # --- 2 days: full body twice ------------------------------------------- #
     (2, SplitStyle.full_body): _full_body(2),
-    # --- 3 days: full body thrice (default) or PPL ------------------------- #
+    # --- 3 days: full body thrice (the only 2x-compliant 3-day split) ------ #
     (3, SplitStyle.full_body): _full_body(3),
-    (3, SplitStyle.push_pull_legs): (
-        DayTemplate(name="Push", muscles=_PUSH),
-        DayTemplate(name="Pull", muscles=_PULL),
-        DayTemplate(name="Legs", muscles=_LEGS),
-    ),
     # --- 4 days: upper/lower twice ----------------------------------------- #
     (4, SplitStyle.upper_lower): (
         DayTemplate(name="Upper A", muscles=_UPPER),
@@ -97,13 +98,16 @@ _TEMPLATES: dict[tuple[int, SplitStyle], tuple[DayTemplate, ...]] = {
         DayTemplate(name="Upper B", muscles=_UPPER),
         DayTemplate(name="Lower B", muscles=_LOWER),
     ),
-    # --- 5 days: PPL + upper/lower ----------------------------------------- #
-    (5, SplitStyle.push_pull_legs): (
-        DayTemplate(name="Push", muscles=_PUSH),
-        DayTemplate(name="Pull", muscles=_PULL),
-        DayTemplate(name="Legs", muscles=_LEGS),
-        DayTemplate(name="Upper", muscles=_UPPER),
-        DayTemplate(name="Lower", muscles=_LOWER),
+    # --- 5 days: upper/lower twice + a full-body day ----------------------- #
+    # Symmetric U/L/U/L + Full: every major muscle is trained on two Upper or two
+    # Lower days (plus the Full day), in EARLY slots, so the session-length slot
+    # cap can't drop a muscle below 2x/week (an asymmetric PPL+U/L 5-day could).
+    (5, SplitStyle.upper_lower): (
+        DayTemplate(name="Upper A", muscles=_UPPER),
+        DayTemplate(name="Lower A", muscles=_LOWER),
+        DayTemplate(name="Upper B", muscles=_UPPER),
+        DayTemplate(name="Lower B", muscles=_LOWER),
+        DayTemplate(name="Full Body", muscles=_FULL),
     ),
     # --- 6 days: PPL twice ------------------------------------------------- #
     (6, SplitStyle.push_pull_legs): (
@@ -121,12 +125,53 @@ _DEFAULT_STYLE: dict[int, SplitStyle] = {
     2: SplitStyle.full_body,
     3: SplitStyle.full_body,
     4: SplitStyle.upper_lower,
-    5: SplitStyle.push_pull_legs,
+    5: SplitStyle.upper_lower,
     6: SplitStyle.push_pull_legs,
 }
 
 #: The day counts the catalog of splits supports. The quiz constrains to these.
 SUPPORTED_DAYS: tuple[int, ...] = tuple(sorted(_DEFAULT_STYLE))
+
+#: The major muscles the ``training-frequency`` floor is enforced on — the
+#: compound-movement primary movers a split is structurally built around, which
+#: the frequency dose-response literature (Schoenfeld 2016) studies. Accessory /
+#: incidental muscles (abdominals, calves, forearms, traps, neck, abductors,
+#: adductors) are intentionally NOT floor-enforced: they get incidental work and
+#: are not what a split's frequency is organised around, so requiring 2x/week of
+#: them would force artificial slots. The generator asserts the floor for these.
+MAJOR_MUSCLES: frozenset[str] = frozenset(
+    {
+        Muscle.chest.value,
+        Muscle.lats.value,
+        Muscle.middle_back.value,
+        Muscle.shoulders.value,
+        Muscle.biceps.value,
+        Muscle.triceps.value,
+        Muscle.quadriceps.value,
+        Muscle.hamstrings.value,
+        Muscle.glutes.value,
+    }
+)
+
+
+def major_muscle_frequencies(
+    days: "tuple[DayTemplate, ...] | list",
+) -> dict[str, int]:
+    """Count how many of ``days`` train each MAJOR muscle (for the floor check).
+
+    Accepts the authored :class:`DayTemplate` tuple (``.muscles`` are
+    :class:`~app.models.exercise.Muscle`) or any day objects exposing ``.muscles``
+    as muscle-value strings. Only :data:`MAJOR_MUSCLES` are counted.
+    """
+    counts: dict[str, int] = {}
+    for day in days:
+        seen_today: set[str] = set()
+        for m in day.muscles:
+            value = m.value if hasattr(m, "value") else str(m)
+            if value in MAJOR_MUSCLES and value not in seen_today:
+                seen_today.add(value)
+                counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def split_for(

@@ -85,10 +85,10 @@ range** — deterministic, defensible, and re-derived if the Principle changes.
 | sessions/muscle/week → frequency floor | `training-frequency` | `sessions_per_muscle_per_week {min}` | each muscle's weekly sets split across ≥ min days |
 | rep range | `rep-scheme` (NEW) | `rep_range_low`, `rep_range_high` (goal-specific) | read low/high directly |
 | effort target (RIR) | `effort-proximity-to-failure` | `reps_in_reserve {min,max}` | working RIR = max of range (furthest from failure within the evidence window) |
-| mesocycle length | `periodization` (bulk/strength, int+/adv) → else `deload` | `mesocycle_weeks {min,max}` / `weeks_between_deloads {min,max}` | midpoint, rounded |
+| mesocycle length | `periodization` if it's in the applicable set → else `deload` | `mesocycle_weeks {min,max}` / `weeks_between_deloads {min,max}` | midpoint, rounded. Source decided by *presence* in the injected Principles (the query layer's applicability filter is the single source — the generator does not re-encode periodization's goal/experience scope) |
 | deload timing | `deload` | `weeks_between_deloads {min,max}` | deload after `mesocycle_weeks` |
-| deload volume cut | `deload` | `deload_load_reduction_percent {min,max}` | midpoint → deload sets = round(meso_top × (1 − pct/100)) |
-| load progression step | `progressive-overload` | `load_increase_percent {min,max}` | recorded as provenance; the per-exercise load comes from the existing Progression core |
+| deload volume cut | `deload` | `deload_volume_reduction_percent {min,max}` (a REAL cited volume param, NOT the load one) | midpoint → deload sets = round(**week-1 floor** × (1 − pct/100)), **clamped strictly below the floor** so the deload is fewer sets than every accumulation week (anchoring off the top made it land on the floor = invisible) |
+| load progression step | `progressive-overload` | `load_increase_percent {min,max}` | the Principle is **required to exist** (a goal composes only from a present KB) but its value is **NOT** put in the provenance receipt: it's a percent the per-set engine (kg-based double-progression) doesn't apply, so advertising it would be a dishonest receipt |
 
 **New Principle `rep-scheme`** (category `intensity`): the KB today has no rep-range
 parameter, yet the generator must derive rep ranges *from* Principles (not
@@ -117,18 +117,27 @@ clock.
 2. **Choose the split** by `days_per_week` (the structural choice; see §4 split
    templates). Each split is a fixed list of training days, each day a list of
    muscle **slots**. Slot count per day is capped by `session_minutes` (≈ one slot
-   per ~12 min, floored at the split's natural size's minimum) — documented,
-   deterministic.
-3. **Frequency check.** Count, across the week's days, how many days train each
-   muscle. The split templates are authored so every primary muscle is hit ≥ the
-   `training-frequency` floor (≥2×) at the supported days/week; the generator
-   asserts this (a test pins it) — if a split violated the floor it would be a bug.
-4. **Weekly volume ramp.** For each muscle, the mesocycle **top** = volume max,
-   the **start** = volume min (both from `volume-dose-response`). Across weeks
-   `1..mesocycle_weeks`, linearly interpolate start→top (rounded), so volume
-   *ramps up*. The **deload week** sets each muscle to
-   `round(top × (1 − deload_pct/100))` — a clear drop. This yields the
-   `program_muscle_volumes` rows. Only muscles the split actually trains get rows.
+   per ~12 min) — but the cap drops **accessory** muscles first and **always keeps
+   a day's major-muscle slots**, so a short session can't push a major muscle
+   below the frequency floor.
+3. **Frequency enforcement (runtime, not just authoring).** Only 2×-compliant
+   splits are offered per day count (at 3 days only full-body; PPL needs ≥6).
+   After building the (capped) split, the generator **counts how many days train
+   each `MAJOR_MUSCLE`** and **raises `FrequencyFloorError`** if any is below the
+   `training-frequency` floor — so a template/cap regression fails loudly instead
+   of shipping a sub-floor Program. (Accessory muscles — abs, calves, forearms,
+   traps, neck, ab/adductors — are exempt; the frequency dose-response literature
+   is about the compound primary movers, and requiring 2× of accessories would
+   force artificial slots.)
+4. **Weekly volume ramp + visible deload.** For each muscle, the mesocycle **top**
+   = volume max, the **start (week-1 floor)** = volume min (both from
+   `volume-dose-response`). Across weeks `1..mesocycle_weeks`, linearly interpolate
+   start→top (rounded), so volume *ramps up*. The **deload week** sets each muscle
+   to `round(floor × (1 − deload_volume_pct/100))` (from the deload rule's
+   **volume** param), **clamped strictly below the week-1 floor** — so the deload
+   is clearly fewer sets than *every* accumulation week (anchoring the cut off the
+   *top* instead coincidentally landed on the floor, making the deload invisible —
+   the bug this fixes). Only muscles the split actually trains get rows.
 5. **Per-day set distribution (derived, not stored separately).** A day's slot for
    a muscle is prescribed `ceil(week_target / times_trained_this_week)` sets, so
    the per-session sets realise the weekly target across the muscle's training
@@ -148,15 +157,20 @@ program's copyrighted text or trademarked specifics.
 | days/week | default split | days |
 |-----------|---------------|------|
 | 2 | Full Body ×2 | FB-A, FB-B |
-| 3 | Full Body ×3 (or PPL if preset) | FB-A, FB-B, FB-C |
+| 3 | Full Body ×3 (the ONLY 2×-compliant 3-day split — no PPL@3) | FB-A, FB-B, FB-C |
 | 4 | Upper/Lower ×2 | Upper-A, Lower-A, Upper-B, Lower-B |
-| 5 | PPL + Upper/Lower | Push, Pull, Legs, Upper, Lower |
+| 5 | Upper/Lower ×2 + Full | Upper-A, Lower-A, Upper-B, Lower-B, Full Body |
 | 6 | PPL ×2 | Push-A, Pull-A, Legs-A, Push-B, Pull-B, Legs-B |
 
 Each day's slots are muscle groups drawn from the dataset `muscle` enum (chest,
 back via lats/middle_back, shoulders, biceps, triceps, quadriceps, hamstrings,
-glutes, calves, abdominals). The set realises ≥2×/week frequency for the major
-muscles at every supported day count.
+glutes, calves, abdominals). **Every offered split realises ≥2×/week frequency
+for every major muscle it trains at every supported day count AND every session
+length** (a symmetric U/L/U/L+Full 5-day, not an asymmetric PPL+U/L, so the
+session-length cap can't drop a major below the floor — verified by a test
+sweeping all day×session combos; the generator also re-asserts it at runtime).
+A PPL@3 (which would train each muscle 1×) is deliberately **not** offered;
+pinning PPL at 3 days falls back to the compliant full-body split.
 
 ## 5. Preset catalog (pinned parameterizations)
 
