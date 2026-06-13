@@ -10,6 +10,7 @@ from app.api.exercises import router as exercises_router
 from app.api.gym_profile import router as gym_profile_router
 from app.api.ingestion import router as ingestion_router
 from app.api.metrics import router as metrics_router
+from app.api.recommendations import router as recommendations_router
 from app.api.sessions import router as sessions_router
 from app.api.workouts import router as workouts_router
 
@@ -26,4 +27,7 @@ router.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"]
 router.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 router.include_router(
     gym_profile_router, prefix="/api/gym-profile", tags=["gym-profile"]
+)
+router.include_router(
+    recommendations_router, prefix="/api/recommendations", tags=["recommendations"]
 )

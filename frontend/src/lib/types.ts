@@ -259,3 +259,23 @@ export interface RestPref {
   /** What the timer should use: the override, or the app's global default. */
   effective_rest_seconds: number;
 }
+
+// --- Freestyle Recommendation ("generate me a workout", #11) ---
+
+/** One prescribed Exercise in a proposal: target sets × reps × weight. */
+export interface RecommendedExercise {
+  exercise_id: string;
+  name: string;
+  target_sets: number;
+  target_reps: number;
+  target_weight_kg: number;
+  /** True when the weight is a first guess (the Exercise had no usable history). */
+  is_starting_point: boolean;
+  primary_muscles: string[];
+  secondary_muscles: string[];
+}
+
+/** Today's freestyle workout proposal (GET /api/recommendations/freestyle). */
+export interface RecommendationResponse {
+  exercises: RecommendedExercise[];
+}
