@@ -7,6 +7,7 @@
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
   import FitbodImport from '$lib/components/import/FitbodImport.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
+  import ExportData from '$lib/components/settings/ExportData.svelte';
 
   let imports = $state<ImportStatusType[]>([]);
   let activeBatchId = $state<string | undefined>(undefined);
@@ -94,6 +95,15 @@
       <p class="text-sm text-surface-500 mt-1">Bring your Fitbod workout history in as Sessions — it seeds your strength records and progression.</p>
     </div>
     <FitbodImport />
+  </section>
+
+  <!-- Data Export Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Export Your Data</h2>
+      <p class="text-sm text-surface-500 mt-1">Download everything you've logged and imported — your data, yours to keep.</p>
+    </div>
+    <ExportData />
   </section>
 
   <!-- Account Section -->

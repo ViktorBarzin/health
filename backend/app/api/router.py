@@ -7,6 +7,7 @@ from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.exercises import router as exercises_router
+from app.api.export import router as export_router
 from app.api.fitbod import router as fitbod_router
 from app.api.gym_profile import router as gym_profile_router
 from app.api.ingestion import router as ingestion_router
@@ -28,6 +29,7 @@ router.include_router(activity_router, prefix="/api/activity", tags=["activity"]
 router.include_router(ingestion_router, prefix="/api/import", tags=["import"])
 router.include_router(fitbod_router, prefix="/api/import", tags=["import"])
 router.include_router(exercises_router, prefix="/api/exercises", tags=["exercises"])
+router.include_router(export_router, prefix="/api/export", tags=["export"])
 router.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
 router.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 router.include_router(

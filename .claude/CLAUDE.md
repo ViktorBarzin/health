@@ -45,6 +45,7 @@ backend/app/
 │   ├── ingestion.py  # /api/import — upload/status/cancel/delete (Apple Health XML/ZIP)
 │   ├── fitbod.py     # /api/import/fitbod — preview + commit (Fitbod CSV import, #9)
 │   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
+│   ├── export.py     # /api/export — streamed full per-user data archive (ZIP of JSON+CSV, #19)
 │   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
 │   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
 │   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
@@ -304,6 +305,35 @@ strength history, so it seeds Progression/Recovery/PRs. Two **pure, tested** cor
 - **Frontend** `lib/fitbod.ts` (`looksLikeFitbodCsv` — pure header sniff to reject a wrong file before upload, vitest)
   + `components/import/FitbodImport.svelte` (mobile flow: upload → preview/summary → resolve unmatched via the reused
   `ExercisePicker` bottom-sheet or "create custom" → confirm → done), wired into the **settings page**.
+
+**Full per-user data Export** (the data-ownership archive — CONTEXT.md "Export"; ADR-0006; #19). One authenticated
+action (`GET /api/export`) streams a ZIP of ALL the caller's own data — the read-side mirror of the ingest API.
+- **`services/export_archive.py`** is the engine. A declarative **`RecordSpec` registry** (one per record type: name,
+  the ordered `(header, attr)` columns, and a `stmt_for(user_id)` user-scoped `Select`) is the **single source of
+  per-user scope** — owner tables filter on `user_id` directly; child tables with no `user_id`
+  (`training_sets` via Session, `workout_route_points` via Workout) filter through a subquery of the parent rows the
+  user owns; **only the user's OWN custom Exercises** are exported (the shared global library is never personal data).
+  Covered: Sessions, Sets, Workouts, route points, `health_records`, `category_records`, activity summaries, Programs
+  (+ days + muscle volumes + provenance), PRs, custom Exercises, Gym Profile, and **Diary Entries when the nutrition
+  tables exist** (probed via `inspect`; skipped gracefully otherwise — nutrition isn't built yet, #21/#22).
+- **Streaming is the cardinal engineering constraint** (prod has ~6.6M `health_records` for one user): each record
+  type is read through a **server-side cursor** (`AsyncSession.stream(stmt).partitions(chunk_size)`), the ZIP is
+  assembled on a `tempfile` **on disk** (one CSV per record type + a single `export.json`), the JSON document is
+  written **incrementally** (arrays opened, rows streamed comma-separated, closed — never a whole table in a list),
+  and the finished file is streamed back in 64 KB byte chunks then deleted. Peak heap scales with `chunk_size`, NOT
+  table size (~2 MB at chunk 500, ~21 MB at the default 5000 — flat regardless of row count). **Two coupled gotchas
+  the tests pin**: (1) streaming a whole ORM **entity** returns JSONB columns as a Python-repr `str` — so the engine
+  projects **explicit columns** (`with_only_columns`) to get the column result-processors; and (2) the value coercion
+  passes `dict`/`list` through **unchanged** (`str(dict)` would emit invalid JSON). Both are required for JSONB
+  (`workout.metadata`, `program.provenance`, `program_day.slots`, `exercise.instructions`/`images`, gym_profile lists)
+  to round-trip as real structures in both JSON and CSV.
+- **Archive layout**: `export.json` (full nested doc: `{user, generated_at, records:{...}}`) + `csv/<record_type>.csv`
+  per type (header always present, even for an empty type), all in one ZIP named `health-export-<email>-<UTC>.zip`.
+- **No new tables / no migration** (Alembic head unchanged) — read-only over existing tables.
+- **Frontend** `lib/export.ts` (`filenameFromContentDisposition` — pure Content-Disposition parser, vitest) + the
+  `api.download()` blob-download helper + `components/settings/ExportData.svelte` (one-tap button), wired into the
+  **settings page**. YAGNI (ADR-0006): a full archive only — not per-type/selectable export, not scheduling, not
+  read-scoped tokens (deferred).
 
 ## Ingestion Pipeline
 
