@@ -17,6 +17,7 @@ for them (nullable ``user_id`` + ``source`` + ``off_id``).
 
 import datetime as dt
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy import or_, select
@@ -31,6 +32,7 @@ from app.models.food import Food
 from app.models.recipe import Recipe, RecipeIngredient
 from app.models.user import User
 from app.schemas.nutrition import (
+    BudgetRead,
     DiaryDayRead,
     DiaryDaySummary,
     DiaryEntryCreate,
@@ -45,7 +47,9 @@ from app.schemas.nutrition import (
     RecipeIngredientRead,
     RecipeRead,
     RecipeUpdate,
+    WeightTrendRead,
 )
+from app.services.budget_query import budget_for_user
 from app.services.nutrition import EntryMacros, MacroTotals, daily_totals
 from app.services.off import is_valid_barcode
 from app.services.off_lookup import lookup_barcode
@@ -465,6 +469,51 @@ async def get_history(
         )
         for day, day_entries in sorted(by_day.items())
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Budget (#23) — the Goal-driven, self-calibrating daily calorie/macro target
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/budget", response_model=BudgetRead)
+async def get_budget(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BudgetRead:
+    """Today's Budget for the caller: the Goal-driven target + the weight trend.
+
+    The Budget is derived from the user's Goal (their active Program's goal, or
+    ``maintain`` by default) and their measured energy expenditure — TDEE reconciled
+    adaptively from logged intake against the de-noised weight trend
+    (``method='adaptive'``), or a labelled bodyweight estimate when there isn't
+    enough data to measure it (``method='estimated'``). With no bodyweight history
+    at all it reports ``insufficient_data`` honestly rather than a fabricated
+    number. All maths is in the pure cores (:mod:`app.services.budget`,
+    :mod:`app.services.weight_trend`); this only injects request time.
+    """
+    now = dt.datetime.now(timezone.utc)
+    result = await budget_for_user(db, user.id, now=now)
+    budget, trend = result.budget, result.trend
+    return BudgetRead(
+        insufficient_data=budget.insufficient_data,
+        method=budget.method,
+        goal=result.goal,
+        tdee_kcal=budget.tdee_kcal,
+        target_kcal=budget.target_kcal,
+        protein_g=budget.protein_g,
+        carbs_g=budget.carbs_g,
+        fat_g=budget.fat_g,
+        target_rate_kg_per_week=budget.target_rate_kg_per_week,
+        intake_days=budget.intake_days,
+        trend=WeightTrendRead(
+            insufficient_data=trend.insufficient_data,
+            true_weight_kg=trend.true_weight_kg,
+            rate_kg_per_week=trend.rate_kg_per_week,
+            rate_pct_per_week=trend.rate_pct_per_week,
+            n_samples=trend.n_samples,
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

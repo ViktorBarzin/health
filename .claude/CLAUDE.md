@@ -76,7 +76,10 @@ backend/app/
 │   ├── matcher.py     # Pure exercise-name matcher (normalise + alias; unresolved→manual) (#9)
 │   ├── fitbod_import.py # Fitbod import DB glue: preview + idempotent (Session-grain) commit + PRs + Source (#9)
 │   ├── nutrition.py   # Pure macro-totalling core (Σ Food per-serving macros × quantity; per-meal+day; round-once) (#21)
-│   └── seed_foods.py  # Idempotent generic whole-foods Food-catalog seed (in-code; upsert by slug) (#21)
+│   ├── seed_foods.py  # Idempotent generic whole-foods Food-catalog seed (in-code; upsert by slug) (#21)
+│   ├── weight_trend.py # Pure weight-trend smoother: time-aware EMA "true weight" + OLS-slope rate (kg/wk, %BW/wk) (#23)
+│   ├── budget.py      # Pure Budget: adaptive TDEE from energy balance + goal-driven calorie/macro target (#23)
+│   └── budget_query.py # Budget glue: BodyMass→trend, Diary intake, protein Principle, active-Program goal → cores (#23)
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -422,6 +425,41 @@ action (`GET /api/export`) streams a ZIP of ALL the caller's own data — the re
   (per-serving macro form), `RecipeBuilder.svelte` (search+add ingredients with quantities + yield + a live computed
   per-serving preview). A recipe-backed Food shows a "Recipe" badge in search. YAGNI: no meal templates, no nutrition AI.
 
+**Unified Goal → dynamic Budget + weight-trend smoother** (the self-calibrating daily target — CONTEXT.md "Budget"/"Goal";
+ADR-0004; #23). Two **pure, tested** cores behind a query layer (no DB/clock/IO; `now` + data injected — the
+`readiness`/`recovery` shape):
+- **`services/weight_trend.py`** — de-noises a noisy daily BodyMass series into a **"true weight"** + a **rate of change**.
+  True weight = a **time-aware EMA** (half-life `_HALFLIFE_DAYS` ≈ 10 days): each step decays the running estimate by
+  `0.5**(Δdays/halflife)` then blends the new reading, so a *gap* between weigh-ins decays history by **elapsed time, not
+  sample count** — irregular/sparse sampling just works. Rate = the **OLS slope of the *raw* in-window samples** (kg/day →
+  kg/week, plus %BW/week); least-squares is itself the noise-robust trend estimator, and regressing the *raw* (not the EMA)
+  avoids the EMA's lag flattening the slope. 28-day window (matches Readiness). Empty/only-stale → `insufficient_data`; a
+  single in-window reading → a weight but **no rate** (one point ≠ a trend) — never a fabricated number. Fully unit-tested
+  (smooths noise; correct rate sign/magnitude on synthetic trends incl. with noise; irregular/sparse/empty/unordered).
+- **`services/budget.py`** — the daily calorie/macro **Budget**. **Adaptive TDEE from energy balance**, NOT a static
+  formula: `TDEE = avg_logged_intake − rate_kg_per_week·KCAL_PER_KG/7` (a surplus/deficit manifests as weight change at
+  `KCAL_PER_KG`=7700 kcal/kg). Target = `TDEE + goal_delta`, the delta sized to drive the **Goal's** intended *rate*
+  (`_GOAL_TARGET_RATE_PCT`, %BW/wk: bulk +0.375 / cut −0.75 / maintain 0 / strength +0.15). **Self-calibrating**: each
+  recompute re-measures TDEE from the latest trend, so the target moves to hold the goal rate as the body responds (a bulk
+  gaining too fast lands a lower target; a stalled cut tightens). Protein from the injected **`protein-intake` Principle**
+  g/kg range (Morton 2018; goal-placed — cut/strength to the top), fat = 25% of kcal, carbs the remainder (floored ≥0).
+  **Honesty rule** (mirrors Readiness `insufficient_data` / the OFF skip-don't-fabricate): can't measure TDEE (no intake
+  *or* no weight rate) → a **labelled** bodyweight estimate (`_KCAL_PER_KG_MAINTENANCE`≈31 kcal/kg, `method='estimated'`);
+  **no bodyweight at all** → `insufficient_data`, null numbers — never a confidently-wrong target. All constants documented
+  at the top of each module.
+- **Goal lives in ONE place** — `services/budget_query.py` reads the user's **active Program's `goal`** (`active_program`),
+  default `maintain` when none; no second goal concept (ADR-0004 unified Goal). The query layer reduces BodyMass (kg-
+  normalised; lb→kg) → trend, Diary Entries → avg intake via the **pure `nutrition.daily_totals`** (reused, never
+  re-derived), the protein Principle, and the goal, then runs the cores. **Target rates + bodyweight basis are documented
+  constants keyed by goal** in `budget.py` — not a new table (YAGNI).
+- **No new DB tables / no migration** (Alembic head unchanged at `d4e5f6a7b8c9`) — read-only over `health_records` /
+  `diary_entries` / `principles` / `programs`. API **`GET /api/nutrition/budget`** (the Goal-driven target + the weight
+  trend, per-user scoped). Frontend **`lib/budget.ts`** (PURE: `remainingMacros` target−logged floored, `goalLabel`,
+  `formatRate`, `trendSummary`; vitest `budget.test.ts`) + **`components/nutrition/BudgetCard.svelte`** on `/nutrition`
+  (today only): calorie target vs logged → remaining + progress bar, per-macro remaining bars, the current weight trend/rate,
+  and an "estimated" footnote when the fallback is active. **No forecast UI** (ADR-0004 cut) — current Budget + current
+  trend only, no "you'll hit X by date Y" projection.
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -457,6 +495,7 @@ frontend/src/
 │   ├── fitbod.ts       # Pure looksLikeFitbodCsv header-sniff (reject wrong file pre-upload, vitest) (#9)
 │   ├── nutrition.ts    # Pure macro view-logic: scale/format/split + history→chart series (vitest) (#21)
 │   ├── barcode.ts      # Pure scan logic: normalize/validate barcode, engine pick, ScanDebouncer (vitest) (#22)
+│   ├── budget.ts       # Pure Budget view-logic: remaining (target−logged), goal label, rate/trend strings (vitest) (#23)
 │   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
 │   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
 │   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
@@ -470,7 +509,8 @@ frontend/src/
 │   │   ├── import/     # XmlUpload, ImportStatus, FitbodImport (CSV → preview → resolve → commit, #9)
 │   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
 │   │   ├── nutrition/  # AddEntrySheet (search/scan/custom/recipe → quantity + Meal → save/edit, #21/#22),
-│   │   │               #   BarcodeScanner (native BarcodeDetector + @zxing fallback), CustomFoodForm, RecipeBuilder (#22)
+│   │   │               #   BarcodeScanner (native BarcodeDetector + @zxing fallback), CustomFoodForm, RecipeBuilder (#22),
+│   │   │               #   BudgetCard (Goal-driven target vs logged → remaining + macro bars + weight trend, #23)
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/

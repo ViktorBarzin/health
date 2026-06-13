@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import AddEntrySheet from '$lib/components/nutrition/AddEntrySheet.svelte';
+  import BudgetCard from '$lib/components/nutrition/BudgetCard.svelte';
   import { MACRO_SERIES, formatMacro, formatServing, macroCalorieSplit } from '$lib/nutrition';
   import type { DiaryDay, DiaryEntry, Meal } from '$lib/types';
 
@@ -189,6 +190,13 @@
         </div>
       {/if}
     </div>
+
+    <!-- Budget: the Goal-driven daily target vs logged + the weight trend (#23).
+         Shown for today only — the target/trend are computed as of now, so pairing
+         them with a past day's logged total would mislead. -->
+    {#if isToday}
+      <BudgetCard logged={day.total} />
+    {/if}
 
     <!-- The four Meal sections -->
     {#each MEAL_ORDER as meal (meal)}

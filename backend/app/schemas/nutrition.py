@@ -256,3 +256,58 @@ class RecipeRead(BaseModel):
     carbs_g: float
     fat_g: float
     ingredients: list[RecipeIngredientRead]
+
+
+# --------------------------------------------------------------------------- #
+# Budget (#23) — the Goal-driven, self-calibrating daily calorie/macro target
+# --------------------------------------------------------------------------- #
+
+
+class WeightTrendRead(BaseModel):
+    """The user's de-noised weight trend (CONTEXT.md "Budget" calibrates on this).
+
+    ``insufficient_data`` is true (numbers null) when there's no in-window scale
+    reading. ``true_weight_kg`` is the smoothed current weight; ``rate_kg_per_week``
+    / ``rate_pct_per_week`` the trend's slope (null with only a single reading — one
+    point can't define a trend). ``n_samples`` backs the UI's confidence hint.
+    """
+
+    insufficient_data: bool
+    true_weight_kg: float | None = None
+    rate_kg_per_week: float | None = None
+    rate_pct_per_week: float | None = None
+    n_samples: int = 0
+
+
+class BudgetRead(BaseModel):
+    """Today's Budget: the Goal-driven calorie/macro target + the trend it rides.
+
+    Per CONTEXT.md, the Budget is "derived from the user's Goal and their measured
+    energy expenditure, self-calibrating against the observed weight trend — never
+    a static formula". ``method`` is ``"adaptive"`` (TDEE measured from energy
+    balance) or ``"estimated"`` (a labelled bodyweight-formula fallback when intake
+    or a weight trend is missing); ``insufficient_data`` (numbers null) when there
+    isn't even a bodyweight to estimate from — the UI then prompts the user rather
+    than showing a fabricated number.
+
+    ``goal`` echoes the Goal the target was built for (the active Program's goal, or
+    ``maintain`` by default). ``trend`` carries the current weight trend so the UI
+    shows Budget and trend together. ``target_rate_kg_per_week`` is the weight
+    change the target is sized to drive.
+    """
+
+    insufficient_data: bool
+    method: str | None = None
+    goal: str
+    # Maintenance + the goal-adjusted daily target.
+    tdee_kcal: float | None = None
+    target_kcal: float | None = None
+    # Macro targets (grams).
+    protein_g: float | None = None
+    carbs_g: float | None = None
+    fat_g: float | None = None
+    # The weight-change rate the target aims for, and how many days of intake
+    # backed the (adaptive) estimate.
+    target_rate_kg_per_week: float | None = None
+    intake_days: int = 0
+    trend: WeightTrendRead

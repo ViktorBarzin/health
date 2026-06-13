@@ -658,3 +658,35 @@ export interface FitbodImportResult {
   unresolved_skipped: number;
   skipped_rows: number;
 }
+
+// --- Budget #23: the Goal-driven, self-calibrating daily calorie/macro target ---
+
+/** The user's de-noised weight trend (the Budget calibrates on this). */
+export interface WeightTrend {
+  insufficient_data: boolean;
+  true_weight_kg: number | null;
+  rate_kg_per_week: number | null;
+  rate_pct_per_week: number | null;
+  n_samples: number;
+}
+
+/** Today's Budget: the Goal-driven calorie/macro target + the trend it rides.
+ *
+ * `method` is 'adaptive' (TDEE measured from energy balance) or 'estimated' (a
+ * labelled bodyweight-formula fallback); `insufficient_data` (numbers null) when
+ * there isn't even a bodyweight to estimate from. `goal` is the active Program's
+ * goal (or 'maintain' by default) — the single Goal driving Program and Budget.
+ */
+export interface Budget {
+  insufficient_data: boolean;
+  method: 'adaptive' | 'estimated' | null;
+  goal: 'bulk' | 'cut' | 'maintain' | 'strength';
+  tdee_kcal: number | null;
+  target_kcal: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  target_rate_kg_per_week: number | null;
+  intake_days: number;
+  trend: WeightTrend;
+}
