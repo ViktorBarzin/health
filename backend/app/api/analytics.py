@@ -30,9 +30,14 @@ from app.schemas.analytics import (
     MuscleRecovery,
     MuscleVolume,
     RecoveryResponse,
+    TrainedExercise,
     VolumeResponse,
 )
-from app.services.analytics import e1rm_trend_for_user, recovery_for_user
+from app.services.analytics import (
+    e1rm_trend_for_user,
+    recovery_for_user,
+    trained_exercises_for_user,
+)
 from app.services.muscle_volume import weekly_muscle_volume
 from app.services.recovery import DEFAULT_HALF_LIFE_HOURS
 
@@ -133,3 +138,17 @@ async def get_e1rm_trend(
         ],
         best_e1rm=round(best, 1) if best is not None else None,
     )
+
+
+@router.get("/exercises", response_model=list[TrainedExercise])
+async def list_trained_exercises(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TrainedExercise]:
+    """Exercises the caller has logged normal Sets for — the e1RM-trend picker.
+
+    Only Exercises with PR-eligible history, so the trend selector lists what the
+    user has actually trained instead of the full catalog. Alphabetical.
+    """
+    rows = await trained_exercises_for_user(db, user.id)
+    return [TrainedExercise(id=eid, name=name) for eid, name in rows]

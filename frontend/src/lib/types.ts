@@ -189,3 +189,48 @@ export interface PersonalRecord {
   at_weight_kg: number | null;
   achieved_at: string;
 }
+
+// --- Training analytics (Recovery, per-muscle volume, e1RM trend) ---
+
+/** Whether a muscle is a primary or secondary mover for an Exercise. */
+export type MuscleRole = 'primary' | 'secondary';
+
+/** One muscle group's current Recovery (freshness) score, 0–100. */
+export interface MuscleRecovery {
+  muscle: string;
+  recovery: number;
+}
+
+/** Per-muscle Recovery snapshot + the model parameters used (GET /api/analytics/recovery). */
+export interface RecoveryResponse {
+  as_of: string;
+  half_life_hours: number;
+  muscles: MuscleRecovery[];
+}
+
+/** One muscle group's set count + volume-load over the trailing window, by role. */
+export interface MuscleVolume {
+  muscle: string;
+  role: MuscleRole;
+  set_count: number;
+  volume_load: number;
+}
+
+/** Per-muscle weekly volume over a trailing window (GET /api/analytics/volume). */
+export interface VolumeResponse {
+  weeks: number;
+  muscles: MuscleVolume[];
+}
+
+/** One estimated-1RM datapoint: the Set's time and its e1RM (kg). */
+export interface E1rmPoint {
+  time: string;
+  e1rm: number;
+}
+
+/** The estimated-1RM trend for one Exercise (GET /api/analytics/e1rm-trend). */
+export interface E1rmTrendResponse {
+  exercise_id: string;
+  points: E1rmPoint[];
+  best_e1rm: number | null;
+}

@@ -21,7 +21,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.exercise import ExerciseMuscle
+from app.models.exercise import Exercise, ExerciseMuscle
 from app.models.training_session import SetType, TrainingSession, TrainingSet
 from app.services.e1rm import estimated_1rm
 from app.services.effort import rpe_to_rir
@@ -127,3 +127,28 @@ async def e1rm_trend_for_user(
         e1rm = estimated_1rm(row.weight_kg, row.reps, rir=rpe_to_rir(row.rpe))
         points.append((row.started_at, e1rm))
     return points
+
+
+async def trained_exercises_for_user(
+    session: AsyncSession,
+    user_id: int,
+) -> list[tuple[uuid.UUID, str]]:
+    """``(exercise_id, name)`` for the Exercises a user has logged normal Sets for.
+
+    The source for the e1RM-trend picker: only Exercises that actually have a
+    PR-eligible (``normal``) Set in the user's history, so the dropdown lists what
+    the user has trained rather than the whole ~870-row catalog. Ordered by name.
+    """
+    stmt = (
+        select(Exercise.id, Exercise.name)
+        .join(TrainingSet, TrainingSet.exercise_id == Exercise.id)
+        .join(TrainingSession, TrainingSet.session_id == TrainingSession.id)
+        .where(
+            TrainingSession.user_id == user_id,
+            TrainingSet.set_type == SetType.normal,
+        )
+        .distinct()
+        .order_by(Exercise.name)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [(row.id, row.name) for row in rows]

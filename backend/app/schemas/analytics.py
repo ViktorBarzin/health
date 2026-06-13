@@ -81,3 +81,10 @@ class E1rmTrendResponse(BaseModel):
     exercise_id: uuid.UUID
     points: list[E1rmPoint]
     best_e1rm: float | None = None
+
+
+class TrainedExercise(BaseModel):
+    """An Exercise the user has logged normal Sets for — the e1RM-trend picker row."""
+
+    id: uuid.UUID
+    name: str

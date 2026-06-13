@@ -258,3 +258,51 @@ async def test_e1rm_trend_unknown_exercise_is_404(client, db_session) -> None:
     client.set_user(alice)
     resp = await client.get(f"/api/analytics/e1rm-trend?exercise_id={uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Trained-exercise picker (the e1RM-trend selector source)
+# --------------------------------------------------------------------------- #
+
+
+async def test_trained_exercises_lists_only_logged_with_normal_sets(client, db_session) -> None:
+    alice = await _user(db_session)
+    bench = await _exercise(
+        db_session, "Bench Press", [(Muscle.chest, MuscleRole.primary)]
+    )
+    squat = await _exercise(
+        db_session, "Squat", [(Muscle.quadriceps, MuscleRole.primary)]
+    )
+    warmup_only = await _exercise(
+        db_session, "Stretch", [(Muscle.hamstrings, MuscleRole.primary)]
+    )
+    never = await _exercise(  # noqa: F841 - intentionally never logged
+        db_session, "Deadlift", [(Muscle.lower_back, MuscleRole.primary)]
+    )
+    await _log(db_session, alice, bench, days_ago=2, weight=100.0, reps=5)
+    await _log(db_session, alice, squat, days_ago=1, weight=140.0, reps=5)
+    await _log(
+        db_session, alice, warmup_only, days_ago=1, weight=10.0, reps=10,
+        set_type=SetType.warmup,
+    )
+    client.set_user(alice)
+
+    body = (await client.get("/api/analytics/exercises")).json()
+    names = {e["name"] for e in body}
+    # Only exercises with at least one normal Set: bench + squat.
+    assert names == {"Bench Press", "Squat"}
+    # Each row carries the id and name the picker needs.
+    assert all("id" in e and "name" in e for e in body)
+
+
+async def test_trained_exercises_is_per_user(client, db_session) -> None:
+    alice = await _user(db_session, "alice@example.com")
+    bob = await _user(db_session, "bob@example.com")
+    bench = await _exercise(
+        db_session, "Bench Press", [(Muscle.chest, MuscleRole.primary)]
+    )
+    await _log(db_session, bob, bench, days_ago=1, weight=140.0, reps=5)
+
+    client.set_user(alice)
+    body = (await client.get("/api/analytics/exercises")).json()
+    assert body == []
