@@ -44,3 +44,43 @@ Decided:
 - KB authoring needs a dedicated research pass with citation verification — it is content
   work as much as code.
 - Everything else in ADR-0002 stands (deterministic core, LLM proposes-never-decides).
+
+### Realized design — Readiness + autoregulation + receipts + adjust (#14, 2026-06-13)
+
+The four-pillar "full autoregulation" promise above was implemented as follows; each piece
+is a pure, documented core (no DB/clock/LLM) behind a query layer, matching the
+`recovery`/`recommendation` pattern:
+
+- **Readiness** (`services/readiness.py`) — a daily per-user 0–100 biometric signal,
+  **separate from training-load Recovery (#10)**. It compares the most-recent HRV (SDNN),
+  resting HR and sleep-hours reading to the user's own **trailing 28-day baseline** (robust
+  deviation = `(recent − mean)/spread`, spread floored at 5% of the mean), orients each so
+  higher = better (HRV up good; resting-HR up bad; sleep saturating above baseline),
+  squashes each through a logistic to a 0–100 component, and blends with weights HRV .5 /
+  RHR .25 / sleep .25 **renormalised over present metrics**. A missing metric drops out;
+  **no usable metric → an explicit `insufficient_data` state, never a fabricated number**.
+  At-baseline reads the neutral 50.
+- **Autoregulation** (`services/autoregulation.py`) — adjusts the active Program day's
+  generated set counts on Readiness + per-muscle Recovery: a combined factor (readiness
+  factor 1.0 at ≥60, falling to 0.5 at 0; recovery factor 1.0 at ≥70 per muscle, to 0.5 at
+  0) **trims top sets**, a strong+fresh day (≥85, recovery ≥70) allows a small bump.
+  Clamped strictly **within the Program's Principle volume band** (per-session floor/ceiling
+  from the ramp's accumulation weeks); a trim never raises an already-reduced **deload**.
+  Emits a human reason ("Readiness 48/100 — trimmed top sets…"). **User-edited slots pass
+  through untouched** (the cardinal invariant). Sustained low readiness (≥3 of the last 5
+  days ≤45) trips a **fatigue-triggered early deload**; the rotation **reflows** past
+  missed days by Session count.
+- **Receipts UI** — every generated parameter on a Program/today taps through to
+  `/principles/{key}` (statement + evidence-backed range + cited studies, a new route), plus
+  a per-Program "science behind this plan" list with evidence grades + citation counts. The
+  daily Readiness card shows its per-metric "X below your baseline" breakdown.
+- **Conversational adjust** (`services/adjust.py` + `adjust_agent.py`) — a swappable
+  `AdjustProvider` ABC with a **deterministic, rules-based default** (parses "make it
+  shorter / no barbell / I'm tired" into bounded levers — `volume_scale`,
+  `exclude_equipment`, `max_exercises`) so the feature ships working with **no external
+  service**. A real provider calling the in-cluster claude-agent-service is **gated behind
+  `ADJUST_PROVIDER=claude-agent`** (default off) and **proposes only**: its JSON is
+  validated/clamped to Principle bounds (`validate_adjustment`) before being applied as
+  editable targets, and it falls back to deterministic on any failure. No new DB tables —
+  Readiness reads existing `health_records`/`category_records`; autoregulation/adjust are
+  in-memory transforms over the already-persisted Program + Recommendation.

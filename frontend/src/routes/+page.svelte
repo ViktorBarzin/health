@@ -7,6 +7,7 @@
   import TodaySummary from '$lib/components/dashboard/TodaySummary.svelte';
   import RecentWorkouts from '$lib/components/dashboard/RecentWorkouts.svelte';
   import SleepSummary from '$lib/components/dashboard/SleepSummary.svelte';
+  import ReadinessCard from '$lib/components/dashboard/ReadinessCard.svelte';
 
   let summary = $state<DashboardSummary | null>(null);
   let rings = $state<ActivityRingData | null>(null);
@@ -187,9 +188,12 @@
     {/if}
   </div>
 
-  <!-- Bottom row: Recent Workouts + Sleep Summary -->
+  <!-- Bottom row: Recent Workouts + Readiness/Sleep insights -->
   <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
     <RecentWorkouts start={dateRange.startISO} end={dateRange.endISO} />
-    <SleepSummary summary={effectiveSummary} {loading} />
+    <div class="space-y-4">
+      <ReadinessCard />
+      <SleepSummary summary={effectiveSummary} {loading} />
+    </div>
   </div>
 </div>

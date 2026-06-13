@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.exercise import Exercise, ExerciseMuscle, MuscleRole
 from app.models.gym_profile import DEFAULT_EQUIPMENT, GymProfile
 from app.models.training_session import SetType, TrainingSession, TrainingSet
+from app.services.adjust import (
+    Adjustment,
+    AdjustmentBounds,
+    AdjustProvider,
+    apply_adjustment,
+    validate_adjustment,
+)
+from app.services.adjust_agent import propose_adjustment
 from app.services.recommendation import (
     DEFAULT_EXERCISE_COUNT,
     DEFAULT_SETS_PER_EXERCISE,
@@ -49,11 +58,13 @@ from app.services.recommendation import (
 from app.services.progression import SetPerformance
 from app.services.recovery import muscle_recovery, MuscleSetLoad
 from app.services.effort import rpe_to_rir
+from app.services.autoregulation import early_deload_triggered
 from app.services.program_query import active_program
 from app.services.program_recommendation import (
     ProgramRecommendation,
     recommend_from_program,
 )
+from app.services.readiness_query import readiness_for_user, recent_daily_readiness
 
 # Recovery is scored over the same trailing window the analytics layer uses (a
 # few half-lives is plenty); candidate history is read over a wider window so a
@@ -230,21 +241,42 @@ async def recommend_for_user(
     )
 
 
+# Sustained-low-readiness window for the fatigue-triggered early Deload (#14):
+# the autoregulator looks back over the last week of daily Readiness.
+_DELOAD_LOOKBACK_DAYS = 7
+
+
 async def recommend_today(
     db: AsyncSession, user_id: int, *, now: dt.datetime
 ) -> tuple[Recommendation, ProgramRecommendation | None]:
     """Today's Recommendation, drawn from the active Program if one exists.
 
-    The unified "today" entry point (#13): when the user has an **active
+    The unified "today" entry point (#13/#14): when the user has an **active
     Program**, today's proposal is the Program's prescription for the next due
-    training day (:func:`app.services.program_recommendation.recommend_from_program`)
-    and the :class:`ProgramRecommendation` context (day name, week, deload flag) is
-    returned alongside it; otherwise it falls back to the **freestyle** generator
-    and the second element is ``None``. ``now`` is injected for determinism.
+    training day, **autoregulated** on today's biometric **Readiness** and the
+    user's per-muscle **Recovery** (trim/keep within Principle bounds, with a
+    reason) and flagged for an **early Deload** if Readiness has been persistently
+    low (:func:`app.services.autoregulation.early_deload_triggered`); the
+    :class:`ProgramRecommendation` context (day name, week, deload flag,
+    autoregulation reason) is returned alongside it. Otherwise it falls back to
+    the **freestyle** generator and the second element is ``None``. ``now`` is
+    injected for determinism.
     """
     program = await active_program(db, user_id)
     if program is not None:
-        program_rec = await recommend_from_program(db, user_id, program, now=now)
+        readiness = await readiness_for_user(db, user_id, now=now)
+        recent = await recent_daily_readiness(
+            db, user_id, now=now, days=_DELOAD_LOOKBACK_DAYS
+        )
+        early_deload = early_deload_triggered(recent)
+        program_rec = await recommend_from_program(
+            db,
+            user_id,
+            program,
+            now=now,
+            readiness=readiness.score,
+            early_deload=early_deload,
+        )
         return program_rec.recommendation, program_rec
     freestyle = await recommend_for_user(db, user_id, now=now)
     return freestyle, None
@@ -292,3 +324,81 @@ async def instantiate_session(
     await db.flush()
     await db.refresh(session, attribute_names=["sets"])
     return session
+
+
+# The conversational adjust trims volume to at most a per-slot floor of one
+# working set — the autoregulation/Program floors already shaped the base
+# prescription; this user-initiated nudge stays inside the bounded volume scale.
+_ADJUST_SETS_FLOOR = 1
+
+
+@dataclass(frozen=True)
+class AdjustResult:
+    """A conversational-adjust outcome: the re-shaped proposal + what was applied.
+
+    ``recommendation`` is the new (editable) proposal; ``adjustment`` is the
+    *validated* :class:`~app.services.adjust.Adjustment` actually applied (clamped
+    to bounds); ``note`` is the human explanation to show. ``program`` carries the
+    active-Program context when the base proposal came from a Program (so the UI
+    keeps its header), else ``None``.
+    """
+
+    recommendation: Recommendation
+    adjustment: Adjustment
+    note: str
+    program: ProgramRecommendation | None
+
+
+async def _equipment_by_exercise(
+    db: AsyncSession, recommendation: Recommendation
+) -> dict[uuid.UUID, str | None]:
+    """Map each proposed Exercise to its required equipment (for exclusion)."""
+    ids = [e.exercise_id for e in recommendation.exercises]
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Exercise.id, Exercise.equipment).where(Exercise.id.in_(ids))
+        )
+    ).all()
+    return {r.id: r.equipment for r in rows}
+
+
+async def adjust_today(
+    db: AsyncSession,
+    user_id: int,
+    request: str,
+    *,
+    now: dt.datetime,
+    provider: AdjustProvider,
+) -> AdjustResult:
+    """Re-shape today's Recommendation from a conversational request (#14).
+
+    The full ADR-0002 loop: generate today's proposal (Program-drawn or
+    freestyle), ask the ``provider`` to **propose** a structured adjustment from
+    the user's free text, **validate** it against the bounds (clamped — the engine
+    decides), then **apply** it to produce a new editable proposal. The provider
+    may be the deterministic default or the gated LLM; either way only the
+    validated adjustment is applied, and starting the result instantiates Sets the
+    user freely overwrites (their edits win). ``now`` is injected for determinism.
+    """
+    base, program_rec = await recommend_today(db, user_id, now=now)
+    equipment = await _gym_equipment(db, user_id)
+
+    proposed = await propose_adjustment(provider, request, equipment=equipment)
+    bounds = AdjustmentBounds(available_equipment=equipment)
+    validated = validate_adjustment(proposed, bounds)
+
+    equip_map = await _equipment_by_exercise(db, base)
+    adjusted = apply_adjustment(
+        base,
+        validated,
+        sets_floor=_ADJUST_SETS_FLOOR,
+        equipment_by_exercise=equip_map,
+    )
+    return AdjustResult(
+        recommendation=adjusted,
+        adjustment=validated,
+        note=validated.note,
+        program=program_rec,
+    )

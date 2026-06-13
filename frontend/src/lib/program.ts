@@ -70,3 +70,52 @@ export function provenanceReceipts(
 export function formatProvenanceValue(receipt: ParamProvenance): string {
   return receipt.unit ? `${receipt.value} ${receipt.unit}` : `${receipt.value}`;
 }
+
+/** Format a provenance range, e.g. `10–20 sets`, `≥2 sessions`, `value` only. */
+export function formatProvenanceRange(receipt: ParamProvenance): string {
+  const unit = receipt.unit ? ` ${receipt.unit}` : '';
+  if (receipt.min !== null && receipt.max !== null) {
+    return `${receipt.min}–${receipt.max}${unit}`;
+  }
+  if (receipt.min !== null) return `≥${receipt.min}${unit}`;
+  if (receipt.max !== null) return `≤${receipt.max}${unit}`;
+  return `${receipt.value}${unit}`;
+}
+
+/** The distinct Principle keys a Program was built from (stable order). */
+export function provenancePrincipleKeys(
+  provenance: Record<string, ParamProvenance>,
+): string[] {
+  const seen: string[] = [];
+  for (const p of Object.values(provenance)) {
+    if (!seen.includes(p.principle_key)) seen.push(p.principle_key);
+  }
+  return seen;
+}
+
+/** Human label + Tailwind colour for an evidence grade (A/B/C). */
+export function evidenceGradeLabel(grade: string): string {
+  switch (grade) {
+    case 'A':
+      return 'Strong evidence';
+    case 'B':
+      return 'Moderate evidence';
+    case 'C':
+      return 'Limited evidence';
+    default:
+      return grade;
+  }
+}
+
+export function evidenceGradeColor(grade: string): string {
+  switch (grade) {
+    case 'A':
+      return 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10';
+    case 'B':
+      return 'text-amber-400 border-amber-500/40 bg-amber-500/10';
+    case 'C':
+      return 'text-orange-400 border-orange-500/40 bg-orange-500/10';
+    default:
+      return 'text-surface-400 border-surface-600 bg-surface-800';
+  }
+}

@@ -14,7 +14,7 @@ reasoning rather than handing back an opaque list.
 
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RecommendedExerciseRead(BaseModel):
@@ -62,12 +62,31 @@ class StartRecommendationRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class AutoregulationRead(BaseModel):
+    """The autoregulation applied to today's Program day (#14, ADR-0004).
+
+    Surfaces *why* the day looks the way it does: ``adjusted`` is true when the
+    engine trimmed (or raised) volume on Readiness / Recovery; ``reason`` is the
+    plain-English explanation ("Readiness 48/100 — trimmed top sets to protect
+    recovery (chest)"); ``readiness`` echoes the score used (null when no
+    biometric signal); ``early_deload`` is true when sustained low signals tripped
+    a fatigue deload earlier than the calendar one; ``trimmed_muscles`` lists the
+    muscles whose volume was cut.
+    """
+
+    adjusted: bool = False
+    reason: str = ""
+    readiness: float | None = None
+    early_deload: bool = False
+    trimmed_muscles: list[str] = []
+
+
 class ProgramContext(BaseModel):
     """The active-Program context attached to a Program-drawn Recommendation.
 
     Present only when an active Program produced today's proposal (the "today"
     endpoint); ``None``/absent for the freestyle path. Lets the UI show "Week 5 of
-    6 — Deload · Upper A" above the proposal.
+    6 — Deload · Upper A" above the proposal, plus the autoregulation reason.
     """
 
     program_id: uuid.UUID
@@ -77,6 +96,7 @@ class ProgramContext(BaseModel):
     week: int
     total_weeks: int
     is_deload: bool
+    autoregulation: AutoregulationRead | None = None
 
 
 class TodayRecommendationResponse(RecommendationResponse):
@@ -89,3 +109,29 @@ class TodayRecommendationResponse(RecommendationResponse):
 
     source: str = "freestyle"
     program: ProgramContext | None = None
+
+
+class AdjustRequest(BaseModel):
+    """A conversational adjust request — free-text the provider maps to levers.
+
+    E.g. "make it shorter", "no barbell today", "I'm tired". The provider
+    (deterministic by default, the gated LLM otherwise) only *proposes*; the
+    engine validates the proposal against Principle bounds before applying it.
+    """
+
+    request: str = Field(min_length=1, max_length=500)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdjustResponse(TodayRecommendationResponse):
+    """The re-shaped proposal plus what the adjust did.
+
+    Extends the today shape (so the UI renders it identically) with ``note`` (the
+    human explanation of the change) and ``applied`` (the validated levers — for
+    transparency / debugging). The proposal is editable: starting it instantiates
+    Sets the user overwrites, so their edits still win (ADR-0002).
+    """
+
+    note: str = ""
+    applied: dict = {}

@@ -4,12 +4,16 @@
   import { muscleLabel } from '$lib/muscle-heat';
   import {
     barHeightPct,
+    evidenceGradeColor,
+    evidenceGradeLabel,
+    formatProvenanceRange,
     formatProvenanceValue,
     groupVolumeByMuscle,
     maxTargetSets,
+    provenancePrincipleKeys,
     provenanceReceipts,
   } from '$lib/program';
-  import type { ProgramDetail } from '$lib/types';
+  import type { Principle, ProgramDetail } from '$lib/types';
 
   // Program overview (#13, ADR-0004): the weeks × days structure, the ramping
   // per-muscle weekly volume (a small bar strip), the deload week flagged, and
@@ -17,6 +21,10 @@
   // receipts UI will expand into full citations. Plus a CTA into today's workout
   // (the active Program drives the daily Recommendation).
   let program = $state<ProgramDetail | null>(null);
+  // The Principles this Program was built from, keyed by key — for the "science
+  // behind this plan" section (statement + evidence grade + citation count) and
+  // to enrich each receipt with its plain-English statement.
+  let principles = $state<Record<string, Principle>>({});
   let loading = $state(true);
   let error = $state('');
   let acting = $state(false);
@@ -32,11 +40,26 @@
     error = '';
     try {
       program = await api.get<ProgramDetail>(`/api/programs/${programId}`);
+      await loadPrinciples(program);
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load program';
     } finally {
       loading = false;
     }
+  }
+
+  async function loadPrinciples(p: ProgramDetail) {
+    // Fetch exactly the Principles this Program derives from (by their keys in the
+    // provenance receipt) so the science section needs no extra applicability logic.
+    const keys = provenancePrincipleKeys(p.provenance);
+    const fetched = await Promise.allSettled(
+      keys.map((k) => api.get<Principle>(`/api/principles/${k}`)),
+    );
+    const map: Record<string, Principle> = {};
+    fetched.forEach((r, i) => {
+      if (r.status === 'fulfilled') map[keys[i]] = r.value;
+    });
+    principles = map;
   }
 
   async function activate() {
@@ -59,6 +82,13 @@
     program ? Array.from({ length: program.total_weeks }, (_, i) => i + 1) : [],
   );
   let receipts = $derived(provenanceReceipts(program?.provenance ?? {}));
+  // The distinct Principles behind the plan (those we successfully loaded), in
+  // the receipt's first-seen key order.
+  let sciencePrinciples = $derived(
+    provenancePrincipleKeys(program?.provenance ?? {})
+      .map((k) => principles[k])
+      .filter((p): p is Principle => p !== undefined),
+  );
 
   const goalLabel: Record<string, string> = {
     bulk: 'Build muscle',
@@ -170,32 +200,67 @@
       </div>
     </section>
 
-    <!-- Provenance receipts ("why this number") -->
+    <!-- Provenance receipts ("why this number") — tap any to its Principle -->
     <section class="space-y-2">
       <h2 class="text-xs font-semibold uppercase tracking-wide text-surface-500">
-        The science behind this plan
+        Why these numbers
       </h2>
       <p class="text-[11px] text-surface-500">
-        Every number is derived from the Principles knowledge base.
+        Every parameter is derived from the Principles knowledge base — tap one for
+        the rule, its range, and the studies.
       </p>
       <ul class="space-y-1.5">
         {#each receipts as r (r.param)}
-          <li class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-surface-800/60 border border-surface-700/60">
-            <div class="min-w-0">
-              <p class="text-xs text-surface-300 capitalize truncate">{r.label}</p>
-              <a
-                href="/principles/{r.principle_key}"
-                class="text-[11px] text-primary-400 hover:text-primary-300 underline underline-offset-2"
-              >
-                {r.principle_key}
-              </a>
-            </div>
-            <span class="shrink-0 text-sm font-semibold text-surface-100 tabular-nums">
-              {formatProvenanceValue(r)}
-            </span>
+          <li>
+            <a
+              href="/principles/{r.principle_key}"
+              class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-surface-800/60 border border-surface-700/60 hover:border-primary-500/50 transition-colors"
+            >
+              <div class="min-w-0">
+                <p class="text-xs text-surface-200 capitalize truncate">{r.label}</p>
+                <p class="text-[11px] text-surface-500 truncate">
+                  from {r.principle_key} · range {formatProvenanceRange(r)}
+                </p>
+              </div>
+              <span class="shrink-0 inline-flex items-center gap-1 text-sm font-semibold text-surface-100 tabular-nums">
+                {formatProvenanceValue(r)}
+                <svg class="w-3.5 h-3.5 text-surface-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+              </span>
+            </a>
           </li>
         {/each}
       </ul>
     </section>
+
+    <!-- The science behind this plan: the Principles it was built from -->
+    {#if sciencePrinciples.length > 0}
+      <section class="space-y-2">
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-surface-500">
+          The science behind this plan
+        </h2>
+        <ul class="space-y-2">
+          {#each sciencePrinciples as p (p.key)}
+            <li class="p-3 rounded-xl bg-surface-800 border border-surface-700">
+              <a href="/principles/{p.key}" class="block group">
+                <div class="flex items-start justify-between gap-2 mb-1">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] border {evidenceGradeColor(p.evidence_grade)}">
+                    Grade {p.evidence_grade}
+                  </span>
+                  <span class="text-[10px] text-surface-500 shrink-0">
+                    {p.citations.length} citation{p.citations.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <p class="text-xs text-surface-300 leading-snug group-hover:text-surface-100 transition-colors">
+                  {p.statement}
+                </p>
+                <p class="mt-1 text-[10px] text-surface-500">{evidenceGradeLabel(p.evidence_grade)}</p>
+              </a>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {/if}
 </div>

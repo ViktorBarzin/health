@@ -38,7 +38,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +47,11 @@ from app.models.exercise import Exercise, ExerciseMuscle, MuscleRole
 from app.models.gym_profile import DEFAULT_EQUIPMENT, GymProfile
 from app.models.program import Program, ProgramDay, ProgramMuscleVolume
 from app.models.training_session import SetType, TrainingSession, TrainingSet
+from app.services.autoregulation import (
+    AdjustableSlot,
+    AdjustmentResult,
+    autoregulate_day,
+)
 from app.services.effort import rpe_to_rir
 from app.services.program_generation import sets_for_slot
 from app.services.progression import SetPerformance, next_target
@@ -55,10 +60,16 @@ from app.services.recommendation import (
     RecommendedExercise,
     is_bodyweight,
 )
+from app.services.recovery import MuscleSetLoad, muscle_recovery
 
 # Candidate history is read over the same wide window the freestyle path uses, so
 # a lift trained infrequently still progresses off its last working set.
 _HISTORY_WINDOW = dt.timedelta(weeks=12)
+
+# Recovery is scored over the same trailing window the analytics + freestyle
+# paths use (a few half-lives is plenty) so autoregulation reads the same
+# per-muscle freshness the heatmap shows.
+_RECOVERY_WINDOW = dt.timedelta(weeks=4)
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,13 @@ class ProgramRecommendation:
     existing ``instantiate_session`` path consumes it unchanged) with the day
     name, the current week, and the deload flag the UI surfaces ("Week 5 of 6 —
     Deload", "Upper A").
+
+    ``autoregulation`` is the result of adjusting the generated day on today's
+    biometric **Readiness** and per-muscle **Recovery** (#14): the ``recommendation``
+    already reflects the adjusted set counts; this field carries the
+    human-readable **reason** ("Readiness 48/100 — trimmed top sets") and the flags
+    the UI surfaces. ``early_deload`` is true when sustained low signals tripped a
+    fatigue deload earlier than the calendar one.
     """
 
     recommendation: Recommendation
@@ -79,6 +97,9 @@ class ProgramRecommendation:
     week: int
     total_weeks: int
     is_deload: bool
+    autoregulation: AdjustmentResult | None = None
+    readiness: float | None = None
+    early_deload: bool = False
 
 
 def _weeks_elapsed(created_at: dt.datetime, now: dt.datetime) -> int:
@@ -233,20 +254,95 @@ def _times_trained_per_week(program: Program) -> Counter:
     return counts
 
 
+def _session_volume_bounds(program: Program) -> dict[str, tuple[int, int]]:
+    """Per-muscle (floor, ceiling) per-SESSION set counts — the autoregulation band.
+
+    Autoregulation may move a slot's set count only **within the Principle-derived
+    volume band the Program already encodes**. The ramp's *accumulation* weeks span
+    the per-muscle weekly volume floor → top (deload weeks excluded — they're a
+    deliberate cut, not the band); dividing each by how many days train the muscle
+    (:func:`app.services.program_generation.sets_for_slot`) gives the per-session
+    floor and ceiling. So a poor-readiness trim never drops below the week-1 floor's
+    per-session share, and a strong-readiness bump never exceeds the volume
+    ceiling's — keeping autoregulation inside the evidence window (ADR-0004).
+    """
+    per_week = _times_trained_per_week(program)
+    by_muscle: dict[str, list[int]] = {}
+    for v in program.muscle_volumes:
+        if v.is_deload:
+            continue
+        by_muscle.setdefault(v.muscle, []).append(v.target_sets)
+    bounds: dict[str, tuple[int, int]] = {}
+    for muscle, targets in by_muscle.items():
+        times = per_week.get(muscle, 1)
+        floor = sets_for_slot(min(targets), times)
+        ceiling = sets_for_slot(max(targets), times)
+        bounds[muscle] = (max(1, floor), max(floor, ceiling))
+    return bounds
+
+
+async def _recovery_map(
+    db: AsyncSession, user_id: int, *, now: dt.datetime
+) -> dict[str, float]:
+    """Per-muscle Recovery (0–100) for the user, reusing the Recovery core.
+
+    The same per-muscle freshness the heatmap and the freestyle path read,
+    duplicated minimally (matching :mod:`app.services.recommendation_query`) so the
+    windows stay independent. Feeds autoregulation: a still-fatigued muscle is
+    trimmed harder than a fresh one.
+    """
+    window_start = now - _RECOVERY_WINDOW
+    stmt = (
+        select(
+            ExerciseMuscle.muscle,
+            ExerciseMuscle.role,
+            TrainingSession.started_at,
+            TrainingSet.weight_kg,
+            TrainingSet.reps,
+        )
+        .select_from(TrainingSet)
+        .join(TrainingSession, TrainingSet.session_id == TrainingSession.id)
+        .join(ExerciseMuscle, ExerciseMuscle.exercise_id == TrainingSet.exercise_id)
+        .where(
+            TrainingSession.user_id == user_id,
+            TrainingSet.set_type == SetType.normal,
+            TrainingSession.started_at >= window_start,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    loads = [
+        MuscleSetLoad(
+            muscle=r.muscle.value if hasattr(r.muscle, "value") else str(r.muscle),
+            role=r.role.value if hasattr(r.role, "value") else str(r.role),
+            performed_at=r.started_at,
+            volume_load=r.weight_kg * r.reps,
+            set_type=SetType.normal,
+        )
+        for r in rows
+    ]
+    return muscle_recovery(loads, now=now)
+
+
 async def recommend_from_program(
     db: AsyncSession,
     user_id: int,
     program: Program,
     *,
     now: dt.datetime,
+    readiness: float | None = None,
+    early_deload: bool = False,
 ) -> ProgramRecommendation:
     """Today's Recommendation drawn from the active Program's next due day.
 
     Computes the next due day + current week, then fills each of that day's muscle
     slots with a Gym-Profile-equippable Exercise loaded via Progression at the
     Program's rep range, with per-session sets realising the week's per-muscle
-    volume target (deload week reduces it automatically). Deterministic for fixed
-    ``now`` + DB state.
+    volume target (deload week reduces it automatically). The day is then
+    **autoregulated** on the injected biometric ``readiness`` and the user's
+    per-muscle **Recovery** — trimming top sets (within the Program's Principle
+    volume band) when fatigue is high, allowing the planned-or-slightly-more when
+    strong — with a human-readable reason. Deterministic for fixed ``now`` + DB
+    state + injected ``readiness``.
     """
     days_per_week = program.days_per_week
     started = await _session_count_since(db, user_id, program.created_at)
@@ -258,13 +354,16 @@ async def recommend_from_program(
     volume = _volume_by_muscle(program, week)
     is_deload = any(v.is_deload for v in volume.values())
     per_week = _times_trained_per_week(program)
+    bounds = _session_volume_bounds(program)
 
     available = await _equipment(db, user_id)
     history = await _latest_history(db, user_id, now=now)
+    recovery = await _recovery_map(db, user_id, now=now)
 
     rep_range = (program.rep_range_low, program.rep_range_high)
 
     chosen: list[RecommendedExercise] = []
+    slot_muscles: list[str] = []
     used: set[uuid.UUID] = set()
     if day is not None:
         for slot in day.slots:
@@ -296,6 +395,12 @@ async def recommend_from_program(
                     secondary_muscles=tuple(sorted(secondary)),
                 )
             )
+            slot_muscles.append(muscle)
+
+    autoregulation = _autoregulate(
+        chosen, slot_muscles, bounds, readiness=readiness, recovery=recovery
+    )
+    chosen = _apply_adjustment(chosen, autoregulation)
 
     return ProgramRecommendation(
         recommendation=Recommendation(exercises=chosen),
@@ -306,4 +411,60 @@ async def recommend_from_program(
         week=week,
         total_weeks=program.total_weeks,
         is_deload=is_deload,
+        autoregulation=autoregulation,
+        readiness=readiness,
+        early_deload=early_deload,
     )
+
+
+def _autoregulate(
+    chosen: list[RecommendedExercise],
+    slot_muscles: list[str],
+    bounds: dict[str, tuple[int, int]],
+    *,
+    readiness: float | None,
+    recovery: dict[str, float],
+) -> AdjustmentResult:
+    """Run the pure autoregulator over the generated slots.
+
+    Builds one :class:`~app.services.autoregulation.AdjustableSlot` per chosen
+    Exercise — keyed by its **slot muscle** (so the per-muscle Recovery and the
+    Principle volume bounds apply correctly) — and adjusts the day. The slots come
+    straight from the generator (none user-edited here: this is the engine's own
+    proposal, and the start path lets the user's later edits win by simply
+    overwriting the instantiated Sets, per #11's design).
+    """
+    slots = [
+        AdjustableSlot(
+            key=str(ex.exercise_id),
+            muscle=muscle,
+            sets=ex.target_sets,
+            reps=ex.target_reps,
+            weight_kg=ex.target_weight_kg,
+            sets_floor=bounds.get(muscle, (1, ex.target_sets))[0],
+            sets_ceiling=bounds.get(muscle, (1, ex.target_sets))[1],
+            user_edited=False,
+        )
+        for ex, muscle in zip(chosen, slot_muscles)
+    ]
+    return autoregulate_day(slots, readiness=readiness, recovery=recovery)
+
+
+def _apply_adjustment(
+    chosen: list[RecommendedExercise], result: AdjustmentResult
+) -> list[RecommendedExercise]:
+    """Map the autoregulator's adjusted set counts back onto the proposal.
+
+    Only ``target_sets`` changes (autoregulation is a volume lever — reps/weight
+    stay with Progression). Order is preserved (the slots were built in proposal
+    order), so a positional zip is exact.
+    """
+    if not result.slots:
+        return chosen
+    out: list[RecommendedExercise] = []
+    for ex, slot in zip(chosen, result.slots):
+        if slot.sets == ex.target_sets:
+            out.append(ex)
+        else:
+            out.append(replace(ex, target_sets=slot.sets))
+    return out

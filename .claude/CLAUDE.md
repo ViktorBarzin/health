@@ -46,8 +46,9 @@ backend/app/
 │   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
 │   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
 │   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
-│   ├── recommendations.py # /api/recommendations — freestyle + today (active-Program-or-freestyle) preview/start
-│   └── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
+│   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
+│   ├── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
+│   └── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -63,7 +64,11 @@ backend/app/
 │   ├── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
 │   ├── e1rm.py        # Pure estimated-1RM core (1-rep-anchored Epley + optional RIR adjust)
 │   ├── pr.py          # Pure PR detection (4 dimensions; normal-only; strict-improvement)
-│   └── pr_service.py  # PR persistence: prior-bests-from-history + authoritative upsert
+│   ├── pr_service.py  # PR persistence: prior-bests-from-history + authoritative upsert
+│   ├── readiness.py   # Pure daily biometric Readiness core (HRV/RHR/sleep vs baseline) (#14)
+│   ├── autoregulation.py # Pure day-adjuster: trim/keep within Principle bounds + early-deload (#14)
+│   ├── adjust.py      # Conversational-adjust ABC + deterministic provider + validate/apply (#14)
+│   └── adjust_agent.py # Gated claude-agent-service adjust provider (proposes-only; falls back) (#14)
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -199,6 +204,41 @@ generator. Starting it reuses
 `/programs/quiz`, `/programs/[id]` (overview: weeks/days/volume-ramp + provenance receipts),
 `/programs/today`; pure view helpers in `lib/program.ts`.
 
+**Readiness + Autoregulation + Receipts + Adjust** (closing the engine loop — CONTEXT.md "Readiness";
+ADR-0002 + ADR-0004; #14). Four pure cores (no DB/clock/LLM; query layers inject data + `now`), mirroring
+`recovery`/`recommendation`:
+- **Readiness** (`services/readiness.py`, query `readiness_query.py`, API `GET /api/readiness`) — a daily
+  per-user **0–100 biometric** signal, **distinct from training-load Recovery (#10)**. Compares the most-recent
+  HRV (`HeartRateVariabilitySDNN`), resting HR (`RestingHeartRate`) and sleep-hours (summed `%Asleep%`
+  `SleepAnalysis` intervals) reading to the user's **trailing 28-day baseline** (robust deviation
+  `(recent−mean)/spread`, spread floored at 5% of mean), orients so higher=better (HRV↑ good, RHR↑ bad, sleep
+  saturating-above-baseline), logistic-squashes each to a 0–100 component, blends HRV .5 / RHR .25 / sleep .25
+  **renormalised over present metrics**. Missing metric drops out; **no usable metric → `insufficient_data`,
+  never a fake number**; at-baseline = neutral 50.
+- **Autoregulation** (`services/autoregulation.py`) — adjusts the active Program day's generated set counts on
+  Readiness + per-muscle Recovery: a combined factor trims top sets (readiness factor 1.0 at ≥60 → 0.5 at 0;
+  per-muscle recovery factor 1.0 at ≥70 → 0.5 at 0), a strong+fresh day (≥85 / recovery ≥70) allows a small
+  bump. **Clamped within the Program's Principle volume band** (per-session floor/ceiling from the ramp's
+  accumulation weeks); a trim never *raises* an already-reduced **deload**. Emits a human reason. **User-edited
+  slots pass through untouched** (cardinal invariant). `early_deload_triggered` (≥3 of last 5 days ≤45) fires a
+  **fatigue early-deload**; `reflow_day_index` reflows past missed days. Wired into
+  `program_recommendation.recommend_from_program` (injected `readiness`) → surfaced on
+  `GET /api/recommendations/today` as `program.autoregulation` (`adjusted`/`reason`/`readiness`/`early_deload`).
+- **Receipts UI** — every generated parameter taps to **`/principles/[key]`** (new route: statement + cited
+  ranges + studies); `/programs/[id]` gained a "science behind this plan" Principle list (evidence grades +
+  citation counts) and range-annotated tappable receipts; the dashboard `ReadinessCard` shows the score + the
+  per-metric "X below your baseline" breakdown.
+- **Conversational adjust** (`services/adjust.py` + `adjust_agent.py`, API `POST /api/recommendations/adjust[/start]`)
+  — a swappable **`AdjustProvider` ABC**. The **`DeterministicAdjustProvider` is the default** (rules-based parse
+  of "make it shorter / no barbell / I'm tired / dumbbells only" into bounded levers `volume_scale` /
+  `exclude_equipment` / `max_exercises`) so it ships working with **no external service**. `ClaudeAgentAdjustProvider`
+  (gated behind `ADJUST_PROVIDER=claude-agent`, default OFF) calls claude-agent-service's OpenAI-compatible
+  `/v1/chat/completions` and **proposes only**: its JSON is parsed then **validated/clamped to Principle bounds
+  by `validate_adjustment` (the engine's authority)** before `apply_adjustment` produces editable targets;
+  falls back to deterministic on any error. The `today` page has a reason banner + conversational adjust UI;
+  pure helpers in `lib/readiness.ts` (+ `lib/program.ts` receipt/grade helpers). **No new DB tables** — Readiness
+  reads existing health tables; autoregulation/adjust are in-memory transforms (Alembic head unchanged).
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -298,6 +338,13 @@ Woodpecker CI (`.woodpecker/default.yml`):
 DB_PASSWORD=...        # PostgreSQL password
 DEV_AUTH_EMAIL=...     # Local dev only: identity used when no X-authentik-email
                        # header is present. MUST be unset in production.
+ADJUST_PROVIDER=...    # Conversational-adjust provider (#14): "deterministic"
+                       # (DEFAULT — rules-based, no external service) or
+                       # "claude-agent" (the in-cluster LLM, proposes-only, gated).
+CLAUDE_AGENT_URL=...   # claude-agent-service base URL (default the in-cluster svc);
+CLAUDE_AGENT_TOKEN=... #   bearer from Vault secret/claude-agent-service. Read only
+                       #   when ADJUST_PROVIDER=claude-agent; on any failure the
+                       #   adjust falls back to the deterministic provider.
 ```
 
 Set in `.env` file, loaded by docker-compose.

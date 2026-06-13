@@ -280,6 +280,19 @@ export interface RecommendationResponse {
   exercises: RecommendedExercise[];
 }
 
+/**
+ * The autoregulation applied to today's Program day (#14, ADR-0004): why the day
+ * looks the way it does (trimmed/raised on Readiness + Recovery, within Principle
+ * bounds), plus the early-deload flag.
+ */
+export interface Autoregulation {
+  adjusted: boolean;
+  reason: string;
+  readiness: number | null;
+  early_deload: boolean;
+  trimmed_muscles: string[];
+}
+
 /** The active-Program context on a Program-drawn Recommendation. */
 export interface ProgramContext {
   program_id: string;
@@ -289,6 +302,7 @@ export interface ProgramContext {
   week: number;
   total_weeks: number;
   is_deload: boolean;
+  autoregulation: Autoregulation | null;
 }
 
 /**
@@ -299,6 +313,84 @@ export interface ProgramContext {
 export interface TodayRecommendationResponse extends RecommendationResponse {
   source: 'program' | 'freestyle';
   program: ProgramContext | null;
+}
+
+/**
+ * The re-shaped proposal a conversational adjust returns (POST
+ * /api/recommendations/adjust) — the today shape plus a human `note` and the
+ * validated levers `applied`.
+ */
+export interface AdjustResponse extends TodayRecommendationResponse {
+  note: string;
+  applied: {
+    volume_scale: number | null;
+    exclude_equipment: string[];
+    max_exercises: number | null;
+  };
+}
+
+// --- Readiness (the daily biometric signal, #14, ADR-0004) ---
+
+/** One metric's contribution to the Readiness score (recent vs the baseline). */
+export interface ReadinessComponent {
+  metric: string;
+  recent: number;
+  baseline: number;
+  score: number;
+  weight: number;
+  direction: 'above' | 'below' | 'at';
+}
+
+/**
+ * Today's Readiness (GET /api/readiness): a 0–100 biometric signal from HRV,
+ * resting HR and sleep vs the user's baseline. `insufficient_data` is true (and
+ * `score`/`band` null) when there's no usable history.
+ */
+export interface ReadinessResponse {
+  score: number | null;
+  band: 'low' | 'moderate' | 'high' | null;
+  insufficient_data: boolean;
+  components: ReadinessComponent[];
+}
+
+// --- Principles knowledge base (the receipts UI source, #12/#14) ---
+
+export type EvidenceGrade = 'A' | 'B' | 'C';
+
+/** A peer-reviewed source backing a Principle, with a resolvable link. */
+export interface Citation {
+  authors: string;
+  year: number;
+  title: string;
+  journal: string;
+  doi: string | null;
+  pmid: string | null;
+  url: string | null;
+  resolved_url: string | null;
+}
+
+/** One typed parameter range inside a Principle's params. */
+export interface ParamRange {
+  min: number | null;
+  max: number | null;
+  value: number | null;
+  unit: string | null;
+}
+
+/** A cited exercise-science rule (GET /api/principles/{key}). */
+export interface Principle {
+  id: string;
+  key: string;
+  statement: string;
+  category: string;
+  params: Record<string, ParamRange>;
+  goals: TrainingGoal[];
+  experience_levels: ExperienceLevel[];
+  evidence_grade: EvidenceGrade;
+  notes: string | null;
+  version: number;
+  updated_at: string;
+  citations: Citation[];
 }
 
 // --- Goal-driven Programs (#13, ADR-0004) ---

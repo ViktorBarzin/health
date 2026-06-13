@@ -25,6 +25,9 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.recommendation import (
+    AdjustRequest,
+    AdjustResponse,
+    AutoregulationRead,
     ProgramContext,
     RecommendationResponse,
     RecommendedExerciseRead,
@@ -32,12 +35,14 @@ from app.schemas.recommendation import (
     TodayRecommendationResponse,
 )
 from app.schemas.sessions import SessionDetail
+from app.services.adjust_agent import get_adjust_provider
 from app.services.program_recommendation import ProgramRecommendation
 from app.services.recommendation import (
     DEFAULT_EXERCISE_COUNT,
     DEFAULT_SETS_PER_EXERCISE,
 )
 from app.services.recommendation_query import (
+    adjust_today,
     instantiate_session,
     recommend_for_user,
     recommend_today,
@@ -128,7 +133,19 @@ async def start_freestyle(
 
 
 def _program_context(program_rec: ProgramRecommendation) -> ProgramContext:
-    """Map the Program-recommendation context to its wire shape."""
+    """Map the Program-recommendation context (incl. autoregulation) to its wire shape."""
+    auto = program_rec.autoregulation
+    autoregulation = (
+        AutoregulationRead(
+            adjusted=auto.adjusted,
+            reason=auto.reason,
+            readiness=program_rec.readiness,
+            early_deload=program_rec.early_deload,
+            trimmed_muscles=list(auto.trimmed_muscles),
+        )
+        if auto is not None
+        else None
+    )
     return ProgramContext(
         program_id=program_rec.program_id,
         program_name=program_rec.program_name,
@@ -137,6 +154,7 @@ def _program_context(program_rec: ProgramRecommendation) -> ProgramContext:
         week=program_rec.week,
         total_weeks=program_rec.total_weeks,
         is_deload=program_rec.is_deload,
+        autoregulation=autoregulation,
     )
 
 
@@ -182,4 +200,65 @@ async def start_today(
     now = datetime.now(timezone.utc)
     recommendation, _ = await recommend_today(db, user.id, now=now)
     session = await instantiate_session(db, user.id, recommendation)
+    return _detail(session)
+
+
+@router.post("/adjust", response_model=AdjustResponse)
+async def preview_adjust(
+    payload: AdjustRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdjustResponse:
+    """Re-shape today's Recommendation from a conversational request (#14).
+
+    "Make it shorter / no barbell today / I'm tired" — the provider (deterministic
+    by default, the gated claude-agent LLM when ``ADJUST_PROVIDER=claude-agent``)
+    **proposes** a structured adjustment; the engine **validates** it against
+    Principle bounds and **applies** it, returning the re-shaped (editable)
+    proposal plus a human note. The LLM never decides — only the validated levers
+    are applied (ADR-0002).
+    """
+    now = datetime.now(timezone.utc)
+    result = await adjust_today(
+        db, user.id, payload.request, now=now, provider=get_adjust_provider()
+    )
+    base = _to_response(result.recommendation)
+    program = (
+        _program_context(result.program) if result.program is not None else None
+    )
+    return AdjustResponse(
+        exercises=base.exercises,
+        source="program" if result.program is not None else "freestyle",
+        program=program,
+        note=result.note,
+        applied={
+            "volume_scale": result.adjustment.volume_scale,
+            "exclude_equipment": result.adjustment.exclude_equipment,
+            "max_exercises": result.adjustment.max_exercises,
+        },
+    )
+
+
+@router.post(
+    "/adjust/start",
+    response_model=SessionDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_adjust(
+    payload: AdjustRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    """Apply a conversational adjust and start the re-shaped Session.
+
+    Re-shapes today's proposal (same path as the preview) and instantiates it as
+    a Session pre-filled with the adjusted target Sets — returned as the standard
+    ``SessionDetail`` so the existing logging UI drives it and the user's edits
+    overwrite the targets (their edits win).
+    """
+    now = datetime.now(timezone.utc)
+    result = await adjust_today(
+        db, user.id, payload.request, now=now, provider=get_adjust_provider()
+    )
+    session = await instantiate_session(db, user.id, result.recommendation)
     return _detail(session)

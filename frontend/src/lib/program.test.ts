@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { ProgramMuscleVolume, ParamProvenance } from './types';
 import {
   barHeightPct,
+  evidenceGradeColor,
+  evidenceGradeLabel,
+  formatProvenanceRange,
   formatProvenanceValue,
   groupVolumeByMuscle,
   maxTargetSets,
   provenanceLabel,
+  provenancePrincipleKeys,
   provenanceReceipts,
 } from './program';
 
@@ -96,5 +100,53 @@ describe('formatProvenanceValue', () => {
     expect(
       formatProvenanceValue({ principle_key: 'k', value: 6, unit: null, min: null, max: null }),
     ).toBe('6');
+  });
+});
+
+describe('formatProvenanceRange', () => {
+  it('renders a bounded range', () => {
+    expect(
+      formatProvenanceRange({ principle_key: 'k', value: 15, unit: 'sets', min: 10, max: 20 }),
+    ).toBe('10–20 sets');
+  });
+
+  it('renders a min-only range with ≥', () => {
+    expect(
+      formatProvenanceRange({ principle_key: 'k', value: 2, unit: 'sessions', min: 2, max: null }),
+    ).toBe('≥2 sessions');
+  });
+
+  it('falls back to the value when no bounds', () => {
+    expect(
+      formatProvenanceRange({ principle_key: 'k', value: 6, unit: 'reps', min: null, max: null }),
+    ).toBe('6 reps');
+  });
+});
+
+describe('provenancePrincipleKeys', () => {
+  it('returns distinct principle keys in first-seen order', () => {
+    const provenance: Record<string, ParamProvenance> = {
+      weekly_sets_per_muscle_top: { principle_key: 'volume-dose-response', value: 20, unit: 'sets', min: 10, max: 20 },
+      weekly_sets_per_muscle_start: { principle_key: 'volume-dose-response', value: 10, unit: 'sets', min: 10, max: 20 },
+      effort_rir: { principle_key: 'effort-proximity-to-failure', value: 3, unit: 'RIR', min: 0, max: 3 },
+    };
+    expect(provenancePrincipleKeys(provenance)).toEqual([
+      'volume-dose-response',
+      'effort-proximity-to-failure',
+    ]);
+  });
+});
+
+describe('evidenceGrade', () => {
+  it('labels each grade', () => {
+    expect(evidenceGradeLabel('A')).toBe('Strong evidence');
+    expect(evidenceGradeLabel('B')).toBe('Moderate evidence');
+    expect(evidenceGradeLabel('C')).toBe('Limited evidence');
+  });
+
+  it('returns a distinct colour class per grade', () => {
+    expect(evidenceGradeColor('A')).toContain('emerald');
+    expect(evidenceGradeColor('B')).toContain('amber');
+    expect(evidenceGradeColor('C')).toContain('orange');
   });
 });

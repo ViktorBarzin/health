@@ -12,6 +12,7 @@ from app.api.ingestion import router as ingestion_router
 from app.api.metrics import router as metrics_router
 from app.api.principles import router as principles_router
 from app.api.programs import router as programs_router
+from app.api.readiness import router as readiness_router
 from app.api.recommendations import router as recommendations_router
 from app.api.sessions import router as sessions_router
 from app.api.workouts import router as workouts_router
@@ -37,3 +38,6 @@ router.include_router(
     principles_router, prefix="/api/principles", tags=["principles"]
 )
 router.include_router(programs_router, prefix="/api/programs", tags=["programs"])
+router.include_router(
+    readiness_router, prefix="/api/readiness", tags=["readiness"]
+)
