@@ -2,7 +2,10 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# --include=dev: the build toolchain (vite, svelte, the PWA plugin) lives in
+# devDependencies, so they must install even if the build env sets
+# NODE_ENV=production (which otherwise makes npm omit devDeps and breaks `build`).
+RUN if [ -f package-lock.json ]; then npm ci --include=dev; else npm install --include=dev; fi
 COPY frontend/ .
 RUN npm run build
 

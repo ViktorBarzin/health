@@ -4,10 +4,9 @@
 
   interface Props {
     title: string;
-    onToggleSidebar?: () => void;
   }
 
-  let { title, onToggleSidebar }: Props = $props();
+  let { title }: Props = $props();
 
   let userMenuOpen = $state(false);
 
@@ -22,17 +21,13 @@
 
 <header class="bg-surface-900 border-b border-surface-700 px-4 lg:px-6 py-3">
   <div class="flex items-center justify-between gap-4">
-    <!-- Left: hamburger + title -->
+    <!-- Left: brand mark (mobile) + title -->
     <div class="flex items-center gap-3">
-      <button
-        class="lg:hidden p-1.5 rounded-lg text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
-        onclick={onToggleSidebar}
-        aria-label="Toggle sidebar"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+      <div class="lg:hidden w-7 h-7 rounded-lg bg-primary-500 flex items-center justify-center flex-shrink-0">
+        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
         </svg>
-      </button>
+      </div>
       <h2 class="text-lg font-semibold text-surface-100">{title}</h2>
     </div>
 
