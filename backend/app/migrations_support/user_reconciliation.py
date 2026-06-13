@@ -17,6 +17,11 @@ Both are a single primitive — :func:`_merge_user(source, target)`:
 - both present           -> reassign source's owned rows into target (dropping
                             rows that would collide with one the target already
                             owns — prefer existing), then delete the source user.
+
+A dropped colliding ``workouts`` row first has its ``workout_route_points``
+deleted, since that child FK has no ON DELETE CASCADE; the duplicate's GPS trace
+is discarded with it. Reassigned (non-colliding) workouts keep their UUID, so
+their route points follow them untouched.
 """
 
 from __future__ import annotations
@@ -109,15 +114,41 @@ def _reassign_table(
 
     if key_cols:
         cols = ", ".join(prep.quote(c) for c in key_cols)
+        # The colliding source rows about to be dropped (the target already owns
+        # a row with the same per-user key).
+        colliding = (
+            f"SELECT * FROM {tbl} src "  # noqa: S608 - identifiers quoted, ids bound
+            f"WHERE src.user_id = :source_id "
+            f"AND ({cols}) IN ("
+            f"  SELECT {cols} FROM {tbl} tgt WHERE tgt.user_id = :target_id"
+            f")"
+        )
+        params = {"source_id": source_id, "target_id": target_id}
+
+        # workouts.id is referenced by workout_route_points with a plain FK (no
+        # ON DELETE CASCADE), so a dropped workout that has route points would
+        # raise a ForeignKeyViolation. Remove those child rows first — the
+        # discarded duplicate's GPS trace goes with it (consistent with "prefer
+        # the existing target"). Non-colliding workouts keep their UUID, so their
+        # route points follow the reassignment untouched.
+        if table == "workouts":
+            conn.execute(
+                text(
+                    "DELETE FROM workout_route_points "  # noqa: S608 - ids bound
+                    "WHERE workout_id IN (SELECT id FROM (" + colliding + ") c)"
+                ),
+                params,
+            )
+
         conn.execute(
             text(
-                f"DELETE FROM {tbl} src "  # noqa: S608 - identifiers are quoted, ids bound
+                f"DELETE FROM {tbl} src "  # noqa: S608 - identifiers quoted, ids bound
                 f"WHERE src.user_id = :source_id "
                 f"AND ({cols}) IN ("
                 f"  SELECT {cols} FROM {tbl} tgt WHERE tgt.user_id = :target_id"
                 f")"
             ),
-            {"source_id": source_id, "target_id": target_id},
+            params,
         )
 
     conn.execute(

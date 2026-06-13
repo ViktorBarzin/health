@@ -68,6 +68,16 @@ def _insert_health_record(conn, user_id: int, when: datetime, metric: str, value
     )
 
 
+def _insert_route_point(conn, workout_id: uuid.UUID, when: datetime) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO workout_route_points (time, workout_id, latitude, longitude) "
+            "VALUES (:t, :wid, :lat, :lon)"
+        ),
+        {"t": when, "wid": workout_id, "lat": 51.5, "lon": -0.12},
+    )
+
+
 def _count(conn, table: str, user_id: int) -> int:
     return conn.execute(
         text(f"SELECT count(*) FROM {table} WHERE user_id = :uid"), {"uid": user_id}
@@ -180,6 +190,52 @@ def test_viktor_merge_handles_colliding_workout_unique(sync_engine) -> None:
 
         assert _user_id(conn, VIKTOR_OLD) is None
         assert _count(conn, "workouts", gmail_id) == 2  # Running (kept) + Cycling
+
+
+def test_viktor_merge_drops_route_points_of_colliding_workout(sync_engine) -> None:
+    """A colliding me@ workout that has GPS route points must not abort the
+    merge: workout_route_points.workout_id -> workouts.id is a plain FK (no ON
+    DELETE CASCADE), so the dropped duplicate's route points are removed first.
+
+    Reachable on real prod data — me@viktorbarzin.me and vbarzin@gmail.com are
+    both Viktor's accounts, so the same outdoor (GPS) workouts were plausibly
+    imported under both. The surviving (target) workout and its data stay intact.
+    """
+    with sync_engine.begin() as conn:
+        _create_schema(conn)
+        gmail_id = _insert_user(conn, VIKTOR_NEW)
+        me_id = _insert_user(conn, VIKTOR_OLD)
+        t = datetime(2024, 1, 1, 10, tzinfo=timezone.utc)
+
+        # Surviving target workout, with its own route point that must remain.
+        kept = _insert_workout(conn, gmail_id, t, "Running")
+        _insert_route_point(conn, kept, t)
+        # Colliding me@ duplicate carrying a route point (the FK-violation trigger).
+        dup = _insert_workout(conn, me_id, t, "Running")
+        _insert_route_point(conn, dup, t)
+        # A non-colliding me@ workout WITH a route point — both must carry over,
+        # the workout's UUID is unchanged so its points follow automatically.
+        carried = _insert_workout(conn, me_id, t, "Cycling")
+        _insert_route_point(conn, carried, t)
+
+        reconcile_identities(conn)
+
+        assert _user_id(conn, VIKTOR_OLD) is None
+        assert _count(conn, "workouts", gmail_id) == 2  # Running (kept) + Cycling
+        # The dropped duplicate's route point is gone; the kept + carried ones
+        # remain (2 total), still pointing at existing workouts.
+        total_points = conn.execute(
+            text("SELECT count(*) FROM workout_route_points")
+        ).scalar_one()
+        assert total_points == 2
+        assert conn.execute(
+            text("SELECT count(*) FROM workout_route_points WHERE workout_id = :wid"),
+            {"wid": dup},
+        ).scalar_one() == 0
+        assert conn.execute(
+            text("SELECT count(*) FROM workout_route_points WHERE workout_id = :wid"),
+            {"wid": carried},
+        ).scalar_one() == 1
 
 
 def test_idempotent_second_run_is_a_noop(sync_engine) -> None:
