@@ -181,6 +181,41 @@ async def test_connect_rejects_blank_token(client, db_session):
         "/api/connections", json={"provider": "oura", "token": "   "}
     )
     assert resp.status_code == 422
+    # A 422 body must never echo the submitted token (the request `input` echo is
+    # a secret-leak vector — see test_validation_error_never_echoes_the_token).
+    assert "   " not in resp.text or '"input"' not in resp.text
+
+
+async def test_validation_error_never_echoes_the_token(client, db_session):
+    """A 422 for a sibling required field must NOT leak the valid token.
+
+    Pydantic v2's default RequestValidationError handler serializes the offending
+    `input`, and for a `"missing"` error on a required SIBLING field that `input`
+    is the WHOLE request object — which would echo the secret token in plaintext.
+    The custom handler redacts `input`, so the secret must be absent from the body
+    while the response stays a well-formed 422 with the missing-field error.
+    """
+    secret = "OURA-PAT-MUST-NOT-LEAK-IN-422-abc123"
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+
+    # `provider` omitted → a "missing" error on a sibling of the valid `token`.
+    resp = await client.post("/api/connections", json={"token": secret})
+    assert resp.status_code == 422
+    # The secret must NOT appear anywhere in the response body.
+    assert secret not in resp.text
+    # …and it's still a useful, well-formed validation error.
+    body = resp.json()
+    assert "detail" in body
+    errors = body["detail"]
+    assert any(
+        e.get("type") == "missing" and "provider" in e.get("loc", [])
+        for e in errors
+    )
+    # The `input` field is redacted, never the raw value.
+    for e in errors:
+        assert e.get("input") != {"token": secret}
+        assert secret not in str(e.get("input", ""))
 
 
 async def test_connect_returns_503_when_encryption_not_configured(
