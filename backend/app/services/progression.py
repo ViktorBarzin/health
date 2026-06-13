@@ -42,9 +42,14 @@ treat it as a first guess. A caller may seed a starting weight.
 
 Properties (pinned in :mod:`tests.test_progression`)
 ----------------------------------------------------
-* a better-performed set never yields a **lower** next target (monotonic in both
-  reps performed and reps in reserve, measured by the target's e1RM);
-* the rep target stays within ``[low, high]``; load only changes in whole
+* the next **load** is monotonic non-decreasing in both reps performed and reps
+  in reserve — a better-performed set never prescribes a *lighter* next load.
+  Note the right lens: a single-set *e1RM* is deliberately **not** monotonic
+  here, because the load-increase phase resets reps to the bottom (e.g. at the
+  top of the range RIR 0 → 60×12 holds at a higher e1RM than RIR 1 → 62.5×8 —
+  the heavier load for fewer reps *is* the progression). So the pinned invariant
+  is on the prescribed load + rep-target axes, not on e1RM;
+* the rep target always stays within ``[low, high]``; load only changes in whole
   increments and never goes negative;
 * unrated history never *requires* a rating — it degrades to a rep-only rule.
 
