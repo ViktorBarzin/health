@@ -39,7 +39,7 @@ from app.schemas.sessions import (
     SetWriteResult,
 )
 from app.services.effort import rir_to_rpe
-from app.services.pr_service import detect_and_persist_prs
+from app.services.pr_service import detect_and_persist_prs, reconcile_exercise_prs
 from app.services.volume import session_volume
 
 router = APIRouter()
@@ -330,15 +330,22 @@ async def delete_set(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a Set and close the gap it leaves in the Session's order.
+    """Delete a Set, reconcile its Exercise's PRs, and close the order gap.
 
-    Remaining Sets after the deleted index shift down by one so ``order_index``
-    stays 0-based and gap-free.
+    Deleting a Set can retract a record it held (the record-of-truth must move
+    down too), so we reconcile the affected Exercise after removal. Remaining Sets
+    after the deleted index then shift down by one so ``order_index`` stays
+    0-based and gap-free.
     """
     training_set = await _get_owned_set(db, session_id, set_id, user)
     removed_index = training_set.order_index
+    # Capture the Exercise before deletion so we can reconcile its PRs after.
+    exercise_id = training_set.exercise_id
     await db.delete(training_set)
     await db.flush()
+
+    # Retract/recompute any PR the deleted Set supported.
+    await reconcile_exercise_prs(db, user_id=user.id, exercise_id=exercise_id)
 
     # Compact: every later Set moves down one slot. Done in id order to avoid a
     # transient duplicate on the (session_id, order_index) unique constraint.

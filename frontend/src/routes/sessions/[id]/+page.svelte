@@ -7,6 +7,7 @@
   import PRCelebration from '$lib/components/sessions/PRCelebration.svelte';
   import SetTypeChip from '$lib/components/sessions/SetTypeChip.svelte';
   import {
+    celebratablePrs,
     detectPrs,
     priorBestsFromSets,
     type PRResult,
@@ -89,7 +90,9 @@
 
   function celebrate(prs: PRResult[]) {
     // Replace (don't append) so the banner always reflects the latest write.
-    celebratedPrs = prs;
+    // De-noise: a weight PR already implies the trivial first-rep-at-that-weight,
+    // so don't double up the banner (the dimension is still persisted server-side).
+    celebratedPrs = celebratablePrs(prs);
   }
 
   async function load() {

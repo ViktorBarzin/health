@@ -37,30 +37,32 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from app.services.e1rm import estimated_1rm
+
+if TYPE_CHECKING:
+    # Only a type annotation needs SetType. Importing it at runtime would pull in
+    # the whole models package, and ``app.models.personal_record`` keys its enum
+    # column on PRKind below — i.e. models → pr → models is a cycle. Keeping this
+    # module free of any runtime models import (e1rm is model-free; the
+    # non-normal rule is sourced lazily inside detect_prs) breaks that cycle at
+    # the root, so PRKind is safe to import from a fully-initialised module.
+    from app.models.training_session import SetType
 
 
 class PRKind(str, enum.Enum):
     """The four dimensions a Set can set a personal record on.
 
-    A ``str`` enum (like :class:`~app.models.training_session.SetType`) so it is a
-    typed, GROUP-BY-able dimension and serialises to its label on the wire — the
-    same labels the TS ``PRKind`` union uses, keeping Py and TS in lockstep.
-
-    Defined *before* the model/service imports below so it is already bound when
-    ``app.models.personal_record`` (which keys its native enum column on this
-    type) is imported as part of that cascade — otherwise importing this module
-    first would deadlock on a partially-initialised ``PRKind`` (circular import).
+    A ``str`` enum (like ``SetType``) so it is a typed, GROUP-BY-able dimension
+    and serialises to its label on the wire — the same labels the TS ``PRKind``
+    union uses, keeping Py and TS in lockstep.
     """
 
     weight = "weight"
     e1rm = "e1rm"
     reps_at_weight = "reps_at_weight"
     volume = "volume"
-
-
-from app.models.training_session import SetType  # noqa: E402
-from app.services.e1rm import estimated_1rm  # noqa: E402
-from app.services.volume import counts_for_volume  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -113,7 +115,11 @@ def detect_prs(
     easy to flip). Returns an empty list when the Set does not qualify (non-normal
     type, zero load, or zero reps) or beats nothing.
     """
-    # Non-normal Sets never PR — single source of the rule is volume.counts_for_volume.
+    # Non-normal Sets never PR — single source of the rule is volume.counts_for_volume
+    # (imported lazily so this module keeps no runtime dependency on the models
+    # layer, which would re-introduce the pr ↔ models import cycle).
+    from app.services.volume import counts_for_volume
+
     if not counts_for_volume(set_type):
         return []
     # A zero-load or zero-rep Set carries no signal; never a PR.

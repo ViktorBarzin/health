@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  celebratablePrs,
   detectPrs,
   emptyPriorBests,
   epley1rm,
@@ -8,6 +9,7 @@ import {
   priorBestsFromSets,
   type PriorBests,
   type PRKind,
+  type PRResult,
 } from './pr';
 
 // This suite mirrors the backend pure-core suites (tests/test_e1rm.py +
@@ -254,5 +256,30 @@ describe('prLabel', () => {
     expect(prLabel({ kind: 'weight', value: 100, atWeightKg: null })).toBe(
       'New weight PR — 100 kg!',
     );
+  });
+});
+
+describe('celebratablePrs (banner de-noise)', () => {
+  const W: PRResult = { kind: 'weight', value: 100, atWeightKg: null };
+  const E: PRResult = { kind: 'e1rm', value: 116, atWeightKg: null };
+  const R: PRResult = { kind: 'reps_at_weight', value: 5, atWeightKg: 100 };
+  const V: PRResult = { kind: 'volume', value: 500, atWeightKg: null };
+
+  it('suppresses the reps_at_weight PR when a weight PR also fires', () => {
+    const out = celebratablePrs([W, E, R, V]);
+    expect(out.map((p) => p.kind)).toEqual(['weight', 'e1rm', 'volume']);
+  });
+
+  it('keeps a standalone reps_at_weight PR (no weight PR)', () => {
+    const out = celebratablePrs([E, R, V]);
+    expect(out.map((p) => p.kind)).toContain('reps_at_weight');
+  });
+
+  it('is a no-op when there is no weight PR', () => {
+    expect(celebratablePrs([E, V])).toEqual([E, V]);
+  });
+
+  it('leaves an empty list empty', () => {
+    expect(celebratablePrs([])).toEqual([]);
   });
 });

@@ -24,7 +24,11 @@ from app.models.personal_record import PersonalRecord
 from app.models.training_session import SetType, TrainingSession, TrainingSet
 from app.models.user import User
 from app.services.pr import PRKind
-from app.services.pr_service import detect_and_persist_prs, prior_bests_for
+from app.services.pr_service import (
+    detect_and_persist_prs,
+    prior_bests_for,
+    reconcile_exercise_prs,
+)
 
 
 async def _user(db, email="alice@example.com") -> User:
@@ -247,3 +251,117 @@ async def test_prior_bests_reflects_history(db_session) -> None:
     assert prior.reps_by_weight == {100.0: 5, 120.0: 3}
     # Best volume among normal history: 120×3=360 vs 100×5=500 → 500.
     assert prior.best_volume_kg == pytest.approx(500.0)
+
+
+# --------------------------------------------------------------------------- #
+# RETRACTION / true reconciliation — records must self-heal DOWNWARD too.
+#
+# Detection is forward-only; persistence must NOT be. The record-of-truth has to
+# track the user's CURRENT normal-Set history exactly: a slot no longer supported
+# by any normal Set is retracted (deleted), and a slot whose best dropped is
+# lowered. These cases pin the bug the forward-only upsert had.
+# --------------------------------------------------------------------------- #
+
+
+async def test_editing_record_set_down_lowers_or_retracts_records(db_session) -> None:
+    user = await _user(db_session)
+    ex = await _exercise(db_session)
+    sess = await _session(db_session, user)
+    s = await _add_set(db_session, sess, ex, weight=200.0, reps=1)
+    await detect_and_persist_prs(db_session, s)
+    # The 200×1 set holds weight=200, e1rm=200, reps@200=1, volume=200.
+    assert (await _records(db_session, user, ex))[(PRKind.weight, None)].value == 200.0
+
+    # Edit that ONLY set down to 50×1 and reconcile: nothing supports 200 anymore.
+    s.weight_kg = 50.0
+    s.reps = 1
+    await db_session.flush()
+    await detect_and_persist_prs(db_session, s)
+
+    recs = await _records(db_session, user, ex)
+    # Weight record must drop to 50 (the only normal set now).
+    assert recs[(PRKind.weight, None)].value == pytest.approx(50.0)
+    assert recs[(PRKind.e1rm, None)].value == pytest.approx(50.0)
+    assert recs[(PRKind.volume, None)].value == pytest.approx(50.0)
+    # The phantom reps_at_weight bucket at 200 must be GONE; only @50 remains.
+    assert (PRKind.reps_at_weight, 200.0) not in recs
+    assert (PRKind.reps_at_weight, 50.0) in recs
+
+
+async def test_flipping_only_set_to_warmup_retracts_all_records(db_session) -> None:
+    user = await _user(db_session)
+    ex = await _exercise(db_session)
+    sess = await _session(db_session, user)
+    s = await _add_set(db_session, sess, ex, weight=180.0, reps=2)
+    await detect_and_persist_prs(db_session, s)
+    assert len(await _records(db_session, user, ex)) == 4
+
+    # Flip the only supporting set to warmup → ZERO normal sets → all PRs retract.
+    s.set_type = SetType.warmup
+    await db_session.flush()
+    await detect_and_persist_prs(db_session, s)
+
+    assert await _records(db_session, user, ex) == {}
+
+
+async def test_deleting_record_holding_set_retracts_records(db_session) -> None:
+    user = await _user(db_session)
+    ex = await _exercise(db_session)
+    sess = await _session(db_session, user)
+    light = await _add_set(db_session, sess, ex, weight=100.0, reps=5, order=0)
+    await detect_and_persist_prs(db_session, light)
+    heavy = await _add_set(db_session, sess, ex, weight=150.0, reps=3, order=1)
+    await detect_and_persist_prs(db_session, heavy)
+
+    # Heavy holds the weight record (150). Delete it, then reconcile the exercise.
+    heavy_id = heavy.id
+    await db_session.delete(heavy)
+    await db_session.flush()
+    await reconcile_exercise_prs(db_session, user_id=user.id, exercise_id=ex.id)
+
+    recs = await _records(db_session, user, ex)
+    # Weight record falls back to 100 (the surviving set), not the stale 150.
+    assert recs[(PRKind.weight, None)].value == pytest.approx(100.0)
+    # The reps bucket at 150 is gone; @100 survives.
+    assert (PRKind.reps_at_weight, 150.0) not in recs
+    assert (PRKind.reps_at_weight, 100.0) in recs
+    # No record still points at the deleted set.
+    for rec in recs.values():
+        assert rec.achieved_set_id != heavy_id
+
+
+async def test_reconcile_with_no_normal_sets_clears_everything(db_session) -> None:
+    user = await _user(db_session)
+    ex = await _exercise(db_session)
+    sess = await _session(db_session, user)
+    s = await _add_set(db_session, sess, ex, weight=120.0, reps=5)
+    await detect_and_persist_prs(db_session, s)
+    assert len(await _records(db_session, user, ex)) == 4
+
+    # Delete the set entirely, then reconcile: the slate is wiped.
+    await db_session.delete(s)
+    await db_session.flush()
+    await reconcile_exercise_prs(db_session, user_id=user.id, exercise_id=ex.id)
+    assert await _records(db_session, user, ex) == {}
+
+
+async def test_reconcile_keeps_best_across_multiple_sets(db_session) -> None:
+    # With several normal sets, each slot is the MAX over history and points at
+    # the set that holds it.
+    user = await _user(db_session)
+    ex = await _exercise(db_session)
+    sess = await _session(db_session, user)
+    a = await _add_set(db_session, sess, ex, weight=100.0, reps=8, order=0)  # vol 800
+    b = await _add_set(db_session, sess, ex, weight=140.0, reps=2, order=1)  # heaviest
+    await detect_and_persist_prs(db_session, a)
+    await detect_and_persist_prs(db_session, b)
+
+    recs = await _records(db_session, user, ex)
+    assert recs[(PRKind.weight, None)].value == pytest.approx(140.0)
+    assert recs[(PRKind.weight, None)].achieved_set_id == b.id
+    # Volume best is 100×8=800 (held by a), beating 140×2=280.
+    assert recs[(PRKind.volume, None)].value == pytest.approx(800.0)
+    assert recs[(PRKind.volume, None)].achieved_set_id == a.id
+    # Two reps buckets: @100=8 and @140=2.
+    assert recs[(PRKind.reps_at_weight, 100.0)].value == pytest.approx(8)
+    assert recs[(PRKind.reps_at_weight, 140.0)].value == pytest.approx(2)

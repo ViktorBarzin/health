@@ -213,3 +213,20 @@ export function prLabel(pr: PRResult): string {
 function formatKg(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
+
+/**
+ * Filter a set's PRs down to the ones worth *celebrating* in the banner.
+ *
+ * Every new exact weight is trivially a "first rep at this weight"
+ * reps_at_weight PR, so when a `weight` PR already fires for the same set the
+ * reps_at_weight one is just noise — suppress it. This is presentation-only: the
+ * reps_at_weight DIMENSION is still detected and persisted (the backend stores
+ * it); we just don't spam the banner with both. Applied to both the offline
+ * client-detected PRs and the server-authoritative ones so the banner is
+ * consistent either way.
+ */
+export function celebratablePrs(prs: PRResult[]): PRResult[] {
+  const hasWeightPr = prs.some((p) => p.kind === 'weight');
+  if (!hasWeightPr) return prs;
+  return prs.filter((p) => p.kind !== 'reps_at_weight');
+}
