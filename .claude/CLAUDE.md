@@ -45,7 +45,9 @@ backend/app/
 │   ├── ingestion.py  # /api/import — upload/status/cancel/delete
 │   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
 │   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
-│   └── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
+│   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
+│   ├── recommendations.py # /api/recommendations — freestyle + today (active-Program-or-freestyle) preview/start
+│   └── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -87,6 +89,9 @@ backend/app/
 | `personal_records` | id (UUID) | partial-UNIQUE(user_id, exercise_id, kind) WHERE weight_bucket IS NULL, partial-UNIQUE(user_id, exercise_id, kind, weight_bucket) WHERE NOT NULL, (user_id, exercise_id) |
 | `principles` | id (UUID) | UNIQUE(key), (category) |
 | `principle_citations` | id | UNIQUE(principle_id, title) |
+| `programs` | id (UUID) | partial-UNIQUE(user_id) WHERE status='active', (user_id) |
+| `program_days` | id (UUID) | UNIQUE(program_id, day_index) |
+| `program_muscle_volumes` | id | UNIQUE(program_id, muscle, week) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -153,7 +158,33 @@ applicability filter — empty list OR JSONB-contains — mirrored by `Principle
 The KB is **in-code** (`services/seed_principles.py`'s `PRINCIPLES`, idempotent upsert by `key` + citation
 reconciliation), not a vendored dataset, because it is small and hand-authored; **every citation was
 verified against PubMed/DOI at authoring time** (verification log in the seed module docstring) — never
-fabricate or paraphrase an unverified source.
+fabricate or paraphrase an unverified source. Task #13 added one rule, `rep-scheme` (`intensity`;
+goal-specific rep ranges, cited Schoenfeld 2017 loading meta-analysis + Schoenfeld 2021 rep continuum),
+so the Program generator derives rep ranges from the KB too rather than hardcoding them.
+
+**Goal-driven Programs** (the generated multi-week schedule — CONTEXT.md "Program"; ADR-0004; #13). A
+**Program** is generated **only from the Principles KB** by a deterministic, pure core
+(`services/program_generation.py` — no DB, no clock, no LLM; #14 is the LLM layer): a `QuizInput` (goal,
+experience, days/week, session length) + the Principles applicable to `(goal, experience)` →
+`GeneratedProgram`. **Every numeric parameter is derived from a Principle's `params` range** (pick rule:
+midpoint-rounded-clamped for a `{min,max}`, direct read for a `{value}`; effort = top of the RIR range)
+and recorded in a **`provenance`** receipt `{param: {principle_key, value, unit, min?, max?}}` so #14 can
+show "why this number"; a missing required Principle **raises** rather than inventing a number. The split
+shape comes from `services/program_templates.py` (full-body / upper-lower / PPL keyed by days/week — generic
+structures, no copyrighted text; authored to meet the ≥2×/week frequency floor); the **preset catalog**
+(`services/program_presets.py`: GZCLP, Upper/Lower, PPL, 5/3/1-style) is just **pinned `QuizInput`s fed
+through the same generator** — numbers still from Principles. Persistence (`services/program_query.py`) is
+three tables (`programs` header + `provenance` JSONB; `program_days` split slots; `program_muscle_volumes`
+the **ramping** weekly per-muscle target that drops on the scheduled **deload** week) with **one active
+Program per user** (partial unique index `WHERE status='active'`; generating archives the prior, kept not
+deleted). The daily Recommendation path (#11) is extended: `recommendation_query.recommend_today` →
+`services/program_recommendation.py` when a Program is active (today = the Program's next due day —
+`(#Sessions since created) mod days/week` — its slots filled via the existing **Progression** core,
+constrained by the Gym Profile; deload week reduces sets), else the freestyle generator. Starting it reuses
+#11's `instantiate_session` (a `Recommendation` of pre-filled Sets — no prescribed-state column). API
+`/api/programs` + `/api/recommendations/today[/start]`. Frontend: `/programs` (catalog + your Programs),
+`/programs/quiz`, `/programs/[id]` (overview: weeks/days/volume-ramp + provenance receipts),
+`/programs/today`; pure view helpers in `lib/program.ts`.
 
 ## Ingestion Pipeline
 
@@ -232,8 +263,8 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `a1b2c3d4e5f6`
-(`add principles knowledge base`).
+Alembic migrations in `backend/alembic/versions/`. Current head: `b2c3d4e5f6a7`
+(`add goal-driven Programs`).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 

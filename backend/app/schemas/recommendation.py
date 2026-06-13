@@ -60,3 +60,32 @@ class StartRecommendationRequest(BaseModel):
     sets_per_exercise: int | None = None
 
     model_config = {"extra": "forbid"}
+
+
+class ProgramContext(BaseModel):
+    """The active-Program context attached to a Program-drawn Recommendation.
+
+    Present only when an active Program produced today's proposal (the "today"
+    endpoint); ``None``/absent for the freestyle path. Lets the UI show "Week 5 of
+    6 — Deload · Upper A" above the proposal.
+    """
+
+    program_id: uuid.UUID
+    program_name: str
+    day_name: str
+    day_index: int
+    week: int
+    total_weeks: int
+    is_deload: bool
+
+
+class TodayRecommendationResponse(RecommendationResponse):
+    """Today's Recommendation: the Exercises plus the source it was drawn from.
+
+    ``source`` is ``"program"`` when the active Program produced it (then
+    ``program`` carries the week/day/deload context) or ``"freestyle"`` when no
+    Program is active (``program`` is ``None``).
+    """
+
+    source: str = "freestyle"
+    program: ProgramContext | None = None

@@ -49,6 +49,16 @@ Citation verification log (each confirmed via PubMed/DOI on 2026-06-13)
   2022, Front Sports Act Living 4:1073223, DOI 10.3389/fspor.2022.1073223,
   PMID 36619355. Coaches use planned reduced-load periods for fatigue management.
   (grade C — qualitative coach-opinion evidence, noted in ``notes``)
+* rep-scheme — Schoenfeld, Grgic, Ogborn & Krieger 2017, J Strength Cond Res
+  31(12):3508-3523, DOI 10.1519/JSC.0000000000002200 (max strength needs high
+  loads, ES 0.58; hypertrophy similar across a wide loading spectrum), with
+  Schoenfeld, Grgic, Van Every & Plotkin 2021, Sports 9(2):32,
+  DOI 10.3390/sports9020032, PMC7927075 (the repetition-continuum re-examination:
+  strength→lower reps/heavier, hypertrophy→a broad moderate band, endurance→
+  higher reps). Goal-specific rep ranges read by the Program generator (#13).
+  (grade B — strong on "strength favours heavy/low reps" and "hypertrophy is
+  load-robust"; the exact rep *bands* are pragmatic continuum guidance, noted in
+  ``notes``)
 """
 
 from __future__ import annotations
@@ -131,9 +141,10 @@ PRINCIPLES: tuple[PrincipleSeed, ...] = (
         params={
             "sets_per_muscle_per_week": {"min": 10, "max": 20, "unit": "sets"},
         },
-        # Applies whenever the goal involves building/keeping muscle (not a cut's
-        # primary concern) across all experience levels.
-        goals=[g.value for g in _GAIN_GOALS],
+        # Applies across all goals: the volume dose-response is the basis for
+        # building muscle when bulking AND for *retaining* it in a deficit (a cut),
+        # so the Program generator derives weekly volume from it for every goal.
+        goals=[],
         experience_levels=[],
         citations=(
             CitationSeed(
@@ -162,7 +173,9 @@ PRINCIPLES: tuple[PrincipleSeed, ...] = (
         params={
             "sessions_per_muscle_per_week": {"min": 2, "unit": "sessions"},
         },
-        goals=[g.value for g in _GAIN_GOALS],
+        # Universal like volume: training a muscle >=2x/week applies whether the
+        # goal is hypertrophy, strength, maintenance, or muscle retention on a cut.
+        goals=[],
         experience_levels=[],
         citations=(
             CitationSeed(
@@ -411,6 +424,67 @@ PRINCIPLES: tuple[PrincipleSeed, ...] = (
                 journal="Frontiers in Sports and Active Living",
                 doi="10.3389/fspor.2022.1073223",
                 pmid="36619355",
+            ),
+        ),
+    ),
+    PrincipleSeed(
+        key="rep-scheme",
+        statement=(
+            "Rep range follows the goal: train strength with heavier loads for "
+            "lower reps (about 3-6), build muscle with a moderate band (about "
+            "6-12), and bias toward higher reps (about 8-15) when maintaining. "
+            "Maximal strength gains favour heavy/low-rep work, while hypertrophy "
+            "is achievable across a wide spectrum of loads when volume is matched."
+        ),
+        category=PrincipleCategory.intensity,
+        evidence_grade=EvidenceGrade.B,
+        params={
+            # Goal-specific working rep ranges the Program generator reads. Stored
+            # as separate named params (not one range) so the generator selects by
+            # goal; strength is the narrow heavy band, bulk the hypertrophy band,
+            # maintain a slightly higher band, cut mirrors hypertrophy (preserve
+            # muscle in a deficit).
+            "rep_range_strength_low": {"value": 3, "unit": "reps"},
+            "rep_range_strength_high": {"value": 6, "unit": "reps"},
+            "rep_range_hypertrophy_low": {"value": 6, "unit": "reps"},
+            "rep_range_hypertrophy_high": {"value": 12, "unit": "reps"},
+            "rep_range_maintain_low": {"value": 8, "unit": "reps"},
+            "rep_range_maintain_high": {"value": 15, "unit": "reps"},
+        },
+        goals=[],  # the continuum applies across goals; the generator picks a band
+        experience_levels=[],
+        notes=(
+            "Schoenfeld et al. 2017 (meta-analysis) firmly support that maximal "
+            "strength requires high loads (ES 0.58 favouring >60% 1RM) while "
+            "hypertrophy is similar across a wide loading spectrum; Schoenfeld et "
+            "al. 2021 re-examine the repetition continuum and recommend roughly "
+            "<=5-6 reps for strength, ~6-12 for hypertrophy, and 15+ for local "
+            "endurance. The exact rep bands here are pragmatic continuum guidance "
+            "(grade B) rather than a measured optimum, hence ranges, not points."
+        ),
+        citations=(
+            CitationSeed(
+                authors="Schoenfeld BJ, Grgic J, Ogborn D, Krieger JW",
+                year=2017,
+                title=(
+                    "Strength and Hypertrophy Adaptations Between Low- vs. "
+                    "High-Load Resistance Training: A Systematic Review and "
+                    "Meta-analysis"
+                ),
+                journal="Journal of Strength and Conditioning Research",
+                doi="10.1519/JSC.0000000000002200",
+            ),
+            CitationSeed(
+                authors="Schoenfeld BJ, Grgic J, Van Every DW, Plotkin DL",
+                year=2021,
+                title=(
+                    "Loading Recommendations for Muscle Strength, Hypertrophy, "
+                    "and Local Endurance: A Re-Examination of the Repetition "
+                    "Continuum"
+                ),
+                journal="Sports",
+                doi="10.3390/sports9020032",
+                pmid="33671664",
             ),
         ),
     ),

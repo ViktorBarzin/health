@@ -95,6 +95,16 @@ WORKED_PENALTY: float = 40.0
 _BODYWEIGHT_EQUIPMENT: frozenset[str | None] = frozenset({None, "body only"})
 
 
+def is_bodyweight(equipment: str | None) -> bool:
+    """Whether an Exercise needs no equipment (always selectable).
+
+    The single source of the bodyweight rule, reused by the Program-driven
+    recommendation path (:mod:`app.services.program_recommendation`) so both paths
+    agree on what a Gym Profile must hold.
+    """
+    return equipment in _BODYWEIGHT_EQUIPMENT
+
+
 @dataclass(frozen=True)
 class ExerciseCandidate:
     """One Exercise the generator may pick, with what it needs to rank/prescribe.

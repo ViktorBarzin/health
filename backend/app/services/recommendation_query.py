@@ -49,6 +49,11 @@ from app.services.recommendation import (
 from app.services.progression import SetPerformance
 from app.services.recovery import muscle_recovery, MuscleSetLoad
 from app.services.effort import rpe_to_rir
+from app.services.program_query import active_program
+from app.services.program_recommendation import (
+    ProgramRecommendation,
+    recommend_from_program,
+)
 
 # Recovery is scored over the same trailing window the analytics layer uses (a
 # few half-lives is plenty); candidate history is read over a wider window so a
@@ -223,6 +228,26 @@ async def recommend_for_user(
         exercise_count=exercise_count,
         sets_per_exercise=sets_per_exercise,
     )
+
+
+async def recommend_today(
+    db: AsyncSession, user_id: int, *, now: dt.datetime
+) -> tuple[Recommendation, ProgramRecommendation | None]:
+    """Today's Recommendation, drawn from the active Program if one exists.
+
+    The unified "today" entry point (#13): when the user has an **active
+    Program**, today's proposal is the Program's prescription for the next due
+    training day (:func:`app.services.program_recommendation.recommend_from_program`)
+    and the :class:`ProgramRecommendation` context (day name, week, deload flag) is
+    returned alongside it; otherwise it falls back to the **freestyle** generator
+    and the second element is ``None``. ``now`` is injected for determinism.
+    """
+    program = await active_program(db, user_id)
+    if program is not None:
+        program_rec = await recommend_from_program(db, user_id, program, now=now)
+        return program_rec.recommendation, program_rec
+    freestyle = await recommend_for_user(db, user_id, now=now)
+    return freestyle, None
 
 
 async def instantiate_session(

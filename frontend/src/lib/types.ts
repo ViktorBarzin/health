@@ -279,3 +279,109 @@ export interface RecommendedExercise {
 export interface RecommendationResponse {
   exercises: RecommendedExercise[];
 }
+
+/** The active-Program context on a Program-drawn Recommendation. */
+export interface ProgramContext {
+  program_id: string;
+  program_name: string;
+  day_name: string;
+  day_index: number;
+  week: number;
+  total_weeks: number;
+  is_deload: boolean;
+}
+
+/**
+ * Today's Recommendation (GET /api/recommendations/today) — drawn from the
+ * active Program when one is running (`source: "program"`, `program` set), else
+ * freestyle (`source: "freestyle"`, `program: null`).
+ */
+export interface TodayRecommendationResponse extends RecommendationResponse {
+  source: 'program' | 'freestyle';
+  program: ProgramContext | null;
+}
+
+// --- Goal-driven Programs (#13, ADR-0004) ---
+
+export type TrainingGoal = 'bulk' | 'cut' | 'maintain' | 'strength';
+export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced';
+export type ProgramStatus = 'active' | 'archived';
+
+/** One generated parameter's receipt: which Principle it came from + the value. */
+export interface ParamProvenance {
+  principle_key: string;
+  value: number;
+  unit: string | null;
+  min: number | null;
+  max: number | null;
+}
+
+/** One training day in a Program's split: its name and ordered muscle slots. */
+export interface ProgramDay {
+  day_index: number;
+  name: string;
+  /** Ordered slots, e.g. [{ muscle: "chest" }, { muscle: "triceps" }]. */
+  slots: Array<{ muscle: string }>;
+}
+
+/** A per-muscle weekly volume target for one week (ramps, then deloads). */
+export interface ProgramMuscleVolume {
+  muscle: string;
+  week: number;
+  target_sets: number;
+  is_deload: boolean;
+}
+
+/** A Program in the user's list (header without the day/volume detail). */
+export interface ProgramSummary {
+  id: string;
+  name: string;
+  preset_key: string | null;
+  goal: TrainingGoal;
+  experience: ExperienceLevel;
+  days_per_week: number;
+  session_minutes: number;
+  mesocycle_weeks: number;
+  total_weeks: number;
+  deload_week: number;
+  rep_range_low: number;
+  rep_range_high: number;
+  effort_rir: number;
+  status: ProgramStatus;
+  created_at: string;
+}
+
+/** A Program with its split days, ramping volume, and provenance receipt. */
+export interface ProgramDetail extends ProgramSummary {
+  days: ProgramDay[];
+  muscle_volumes: ProgramMuscleVolume[];
+  provenance: Record<string, ParamProvenance>;
+}
+
+/** One catalog preset, for the browse list (GET /api/programs/presets). */
+export interface ProgramPreset {
+  key: string;
+  name: string;
+  summary: string;
+  goal: TrainingGoal;
+  experience: ExperienceLevel;
+  days_per_week: number;
+  session_minutes: number;
+}
+
+/** The option sets the guided quiz renders (GET /api/programs/quiz-options). */
+export interface QuizOptions {
+  goals: Array<{ value: TrainingGoal; label: string }>;
+  experience_levels: Array<{ value: ExperienceLevel; label: string }>;
+  days_per_week: number[];
+  session_minutes: number[];
+}
+
+/** The quiz answers (or a preset selection) that generate a Program. */
+export interface GenerateProgramRequest {
+  preset_key?: string;
+  goal?: TrainingGoal;
+  experience?: ExperienceLevel;
+  days_per_week?: number;
+  session_minutes?: number;
+}

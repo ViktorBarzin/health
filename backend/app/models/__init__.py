@@ -19,6 +19,12 @@ from app.models.principle import (
     PrincipleCitation,
     TrainingGoal,
 )
+from app.models.program import (
+    Program,
+    ProgramDay,
+    ProgramMuscleVolume,
+    ProgramStatus,
+)
 
 __all__ = [
     "User",
@@ -45,4 +51,8 @@ __all__ = [
     "ExperienceLevel",
     "PrincipleCategory",
     "EvidenceGrade",
+    "Program",
+    "ProgramDay",
+    "ProgramMuscleVolume",
+    "ProgramStatus",
 ]

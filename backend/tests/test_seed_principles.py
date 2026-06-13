@@ -243,6 +243,9 @@ _EXPECTED_KEYS = {
     "protein-intake",
     "rest-intervals",
     "deload",
+    # Added for the Program generator (#13): goal-specific rep ranges, cited to
+    # Schoenfeld 2017 (loading meta-analysis) + Schoenfeld 2021 (rep continuum).
+    "rep-scheme",
 }
 
 # DOIs/PMIDs verified against PubMed/DOI at authoring time (2026-06-13).

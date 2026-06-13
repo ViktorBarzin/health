@@ -25,11 +25,14 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.recommendation import (
+    ProgramContext,
     RecommendationResponse,
     RecommendedExerciseRead,
     StartRecommendationRequest,
+    TodayRecommendationResponse,
 )
 from app.schemas.sessions import SessionDetail
+from app.services.program_recommendation import ProgramRecommendation
 from app.services.recommendation import (
     DEFAULT_EXERCISE_COUNT,
     DEFAULT_SETS_PER_EXERCISE,
@@ -37,6 +40,7 @@ from app.services.recommendation import (
 from app.services.recommendation_query import (
     instantiate_session,
     recommend_for_user,
+    recommend_today,
 )
 
 router = APIRouter()
@@ -119,5 +123,63 @@ async def start_freestyle(
     recommendation = await recommend_for_user(
         db, user.id, now=now, exercise_count=count, sets_per_exercise=sets
     )
+    session = await instantiate_session(db, user.id, recommendation)
+    return _detail(session)
+
+
+def _program_context(program_rec: ProgramRecommendation) -> ProgramContext:
+    """Map the Program-recommendation context to its wire shape."""
+    return ProgramContext(
+        program_id=program_rec.program_id,
+        program_name=program_rec.program_name,
+        day_name=program_rec.day_name,
+        day_index=program_rec.day_index,
+        week=program_rec.week,
+        total_weeks=program_rec.total_weeks,
+        is_deload=program_rec.is_deload,
+    )
+
+
+@router.get("/today", response_model=TodayRecommendationResponse)
+async def preview_today(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TodayRecommendationResponse:
+    """Preview today's Recommendation: from the active Program, else freestyle.
+
+    When the user has an active Program, this is the Program's prescription for the
+    next due training day (with the week/day/deload context); otherwise it falls
+    back to the deterministic freestyle generator. The unified daily entry point.
+    """
+    now = datetime.now(timezone.utc)
+    recommendation, program_rec = await recommend_today(db, user.id, now=now)
+    base = _to_response(recommendation)
+    if program_rec is not None:
+        return TodayRecommendationResponse(
+            exercises=base.exercises,
+            source="program",
+            program=_program_context(program_rec),
+        )
+    return TodayRecommendationResponse(exercises=base.exercises, source="freestyle")
+
+
+@router.post(
+    "/today/start",
+    response_model=SessionDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_today(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    """Start today's Recommendation (Program-drawn or freestyle): instantiate a Session.
+
+    Regenerates deterministically server-side (matching the preview) and creates a
+    Session pre-filled with the target Sets, returned as the standard
+    ``SessionDetail`` so the existing logging UI drives it — exactly the #11
+    instantiate path, whether the source was the Program or freestyle.
+    """
+    now = datetime.now(timezone.utc)
+    recommendation, _ = await recommend_today(db, user.id, now=now)
     session = await instantiate_session(db, user.id, recommendation)
     return _detail(session)
