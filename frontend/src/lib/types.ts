@@ -556,6 +556,76 @@ export interface DiaryDay {
   total: MacroTotals;
 }
 
+// --- Nutrition #22: barcode / Open Food Facts, custom Foods, Recipes ---
+
+/** Payload to create a custom (private) Food (per-serving macros). */
+export interface FoodCreate {
+  name: string;
+  brand?: string | null;
+  serving_size: number;
+  serving_unit: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+/** Payload to edit one of the caller's own custom Foods (only sent fields). */
+export interface FoodUpdate {
+  name?: string;
+  brand?: string | null;
+  serving_size?: number;
+  serving_unit?: string;
+  calories?: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
+}
+
+/** One ingredient in a Recipe payload: a Food id + quantity (servings). */
+export interface RecipeIngredientInput {
+  food_id: string;
+  quantity: number;
+}
+
+/** Payload to create or replace a Recipe (macros are computed server-side). */
+export interface RecipeCreate {
+  name: string;
+  yield_servings: number;
+  ingredients: RecipeIngredientInput[];
+}
+
+/** One ingredient of a Recipe, with its contribution at the used quantity. */
+export interface RecipeIngredient {
+  food_id: string;
+  food_name: string;
+  quantity: number;
+  serving_size: number;
+  serving_unit: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+/**
+ * A Recipe: a user-defined Food composed of other Foods, with computed
+ * per-serving macros. `food_id` is the id to log to the diary — a Recipe is
+ * loggable exactly like a Food.
+ */
+export interface Recipe {
+  id: string;
+  food_id: string;
+  name: string;
+  yield_servings: number;
+  // The computed per-serving macros.
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  ingredients: RecipeIngredient[];
+}
+
 // --- Fitbod CSV import (#9) ---
 
 /** A Fitbod exercise name that auto-matched to a library Exercise. */

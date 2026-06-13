@@ -507,6 +507,14 @@ async def _gym_profile_dict(
 # needn't import a model that may be absent.
 _OPTIONAL_TABLES: tuple[tuple[str, str], ...] = (
     ("diary_entries", "diary_entries"),
+    # Recipes (#22) — user-defined Foods composed of other Foods. The ``recipes``
+    # table carries ``user_id`` so the reflection path scopes it per-user and it
+    # round-trips cleanly. (``recipe_ingredients`` has no ``user_id`` — it belongs
+    # to a Recipe, not directly a user — so it is NOT reflected here; a future
+    # slice can join it through the owned ``recipes`` rows if needed. The Recipe's
+    # computed macros also live on its backing Food, which is captured if/when the
+    # custom-Food export is added.)
+    ("recipes", "recipes"),
 )
 
 

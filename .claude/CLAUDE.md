@@ -51,7 +51,7 @@ backend/app/
 │   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
 │   ├── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
 │   ├── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
-│   └── nutrition.py  # /api/nutrition — Food catalog search + Diary CRUD + day view/history (#21)
+│   └── nutrition.py  # /api/nutrition — Food catalog + Diary CRUD + day/history (#21); barcode→OFF, custom Foods, Recipes (#22)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -107,6 +107,8 @@ backend/app/
 | `program_muscle_volumes` | id | UNIQUE(program_id, muscle, week) |
 | `foods` | id (UUID) | partial-UNIQUE(slug) WHERE user_id IS NULL, partial-UNIQUE(user_id, slug) WHERE user_id IS NOT NULL, (user_id) |
 | `diary_entries` | id (UUID) | (user_id, entry_date) |
+| `recipes` | id (UUID) | UNIQUE(food_id), (user_id) |
+| `recipe_ingredients` | id (UUID) | (recipe_id), (food_id) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -373,6 +375,53 @@ action (`GET /api/export`) streams a ZIP of ALL the caller's own data — the re
   total + macro split bar, add/edit/delete) and `/nutrition/history` (calories/macros over a trailing window, reusing
   `BarChart`). Nav: "Nutrition" in the "More" sheet. YAGNI: no barcode/OFF/custom-Foods/Recipes/Budget (#22/#23).
 
+**Nutrition: barcode + Open Food Facts + custom Foods + Recipes** (fast + complete logging — CONTEXT.md "Food"/
+"Recipe"; #22). Extends #21 so the user can log packaged products by scanning, and anything via custom Foods/Recipes.
+- **Barcode scanning (PWA, client-side)** — `lib/barcode.ts` is the **PURE, tested** scan logic (vitest `barcode.test.ts`):
+  `normalizeBarcode` (digits only), `isLikelyBarcode` (6–14 digits, mirrors the backend guard), `pickScanEngine`
+  (native `BarcodeDetector` when present else zxing), `ScanDebouncer` (the camera fires the same code on many frames →
+  accept a code at most once per 1.5s, a new code instantly). `components/nutrition/BarcodeScanner.svelte` is the thin
+  camera glue: native **`BarcodeDetector`** (Chrome/Android, formats EAN-13/EAN-8/UPC-A/UPC-E) with a **`@zxing/browser`**
+  `BrowserMultiFormatReader` fallback (iOS Safari etc.), **dynamically imported** so native-capable browsers don't pay for
+  it. Camera-permission denial / no-camera / unsupported → a clear message + graceful fallback to manual search (the
+  **live camera path needs a real device** — only the pure decision logic is unit-tested).
+- **Open Food Facts (server-side, cached)** — a scanned barcode resolves a packaged Food via the OFF v2 public API
+  (`https://world.openfoodfacts.org/api/v2/product/<barcode>.json`, no key; a descriptive **User-Agent** is sent; the
+  call is **server-side** so the cache is shared and CORS/UA are controlled). `services/off.py` is the **PURE** mapping
+  (`map_off_product`, tested): OFF reports macros **per 100 g** (`energy-kcal_100g`/`proteins_100g`/`carbohydrates_100g`/
+  `fat_100g`), so the resolved Food has a **100 g serving** and those per-100g values as its per-serving macros — no
+  fragile parse of OFF's free-text `serving_size`, no unit guesswork. **Honesty rule** (mirrors the Fitbod skip-don't-
+  fabricate): missing energy or **any** macro, or a non-numeric/negative value → **reject** (never a zero-macro Food).
+  `services/off_lookup.py` is the **cache+fetch** glue: **cache-first** (a shared `source='off'`, `off_id=<barcode>`,
+  `user_id IS NULL` Food) so re-scans/logs are instant and offline-ish and **re-scans hit the cache, not the network**;
+  on a miss it fetches + maps + persists, **race-safe** on `uq_food_global_slug` (catch `IntegrityError` → re-select the
+  winner); **fail-soft** (not-found / incomplete / network error → None → API 404 → client falls back to manual entry).
+  The OFF HTTP client is **injectable** (httpx transport) so tests **mock it and never hit the network**.
+- **Custom Foods** — a user creates a private `source='custom'` Food (per-serving macros), visible only to them (global ∪
+  own, like Exercises). Editable/deletable **only if it's their own custom** (shared/recipe Foods 404). Editing a custom
+  Food's macros triggers the Recipe **compute-on-write fan-out** (below). Delete is RESTRICT-guarded → **409** if the Food
+  is still referenced by a Diary Entry or a Recipe ingredient.
+- **Recipes** — `services/recipe.py` is the **PURE** macro core (`compute_recipe_macros`, tested): per-serving macros =
+  **Σ (ingredient per-serving macros × quantity) ÷ yield servings**; rejects a non-positive yield / no ingredients. A
+  **Recipe IS a Food** (`source='recipe'`, owned by the user) — so it is loggable/searchable/totalled **exactly like any
+  Food, with zero diary-side changes**. Two tables (`recipes` 1:1 with the backing Food via `food_id` UNIQUE + `yield_servings`
+  + `user_id`; `recipe_ingredients` = ingredient `food_id` + `quantity` + `position`). **Documented choice: compute-on-write**
+  — the computed macros are stored on the backing Food at create/edit time, so the hot read path stays a plain Food read;
+  "stays correct if an ingredient is edited" is honoured by `recompute_recipes_using_food` (a **bounded fan-out** that
+  recomputes every Recipe using an edited ingredient Food) rather than pushing a join+sum into every Food read. Ingredient
+  Foods are visibility-checked (a foreign private Food → 404). `services/recipe_query.py` is the DB glue;
+  `load_recipe_with_ingredients` reloads with `selectinload`+`populate_existing` so a just-created Recipe's freshly-appended
+  ingredient rows have their `food` materialised for the response (avoids a `MissingGreenlet` on lazy access).
+- **API** (extends `/api/nutrition`): `GET /barcode/{code}` (resolve cache-first → `FoodRead`; 422 junk, 404 not-found),
+  `POST/PATCH/DELETE /foods` (custom-Food CRUD; edit fans out to Recipes; delete 409 if in use), `GET /recipes`,
+  `POST /recipes`, `GET/PATCH/DELETE /recipes/{id}` (Recipe CRUD; per-user scoped). All `get_current_user`-scoped.
+- **Export** (#19): added `recipes` to the optional-table reflection set — it carries `user_id` so it round-trips per-user
+  cleanly (`recipe_ingredients` has no `user_id`, so it is intentionally NOT reflected — it belongs to a Recipe, not a user).
+- **Frontend** — `AddEntrySheet.svelte` gained a Scan / Custom / Recipe switcher on the search step, all converging on the
+  existing quantity+Meal "detail" step: `BarcodeScanner.svelte` (scan → resolve → log; fallback to search), `CustomFoodForm.svelte`
+  (per-serving macro form), `RecipeBuilder.svelte` (search+add ingredients with quantities + yield + a live computed
+  per-serving preview). A recipe-backed Food shows a "Recipe" badge in search. YAGNI: no meal templates, no nutrition AI.
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -407,6 +456,7 @@ frontend/src/
 │   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
 │   ├── fitbod.ts       # Pure looksLikeFitbodCsv header-sniff (reject wrong file pre-upload, vitest) (#9)
 │   ├── nutrition.ts    # Pure macro view-logic: scale/format/split + history→chart series (vitest) (#21)
+│   ├── barcode.ts      # Pure scan logic: normalize/validate barcode, engine pick, ScanDebouncer (vitest) (#22)
 │   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
 │   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
 │   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
@@ -419,7 +469,8 @@ frontend/src/
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus, FitbodImport (CSV → preview → resolve → commit, #9)
 │   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
-│   │   ├── nutrition/  # AddEntrySheet (search Food → quantity + Meal → save/edit, #21)
+│   │   ├── nutrition/  # AddEntrySheet (search/scan/custom/recipe → quantity + Meal → save/edit, #21/#22),
+│   │   │               #   BarcodeScanner (native BarcodeDetector + @zxing fallback), CustomFoodForm, RecipeBuilder (#22)
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/
@@ -459,8 +510,8 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `c3d4e5f6a7b8`
-(`add nutrition Food catalog + Diary Entries`).
+Alembic migrations in `backend/alembic/versions/`. Current head: `d4e5f6a7b8c9`
+(`add recipes + recipe ingredients`, #22; chains off `c3d4e5f6a7b8` nutrition).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 

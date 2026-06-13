@@ -144,3 +144,115 @@ class DiaryDaySummary(BaseModel):
 
     entry_date: dt.date
     total: MacroTotalsRead
+
+
+# --------------------------------------------------------------------------- #
+# Custom Foods (#22)
+# --------------------------------------------------------------------------- #
+
+
+class FoodCreate(BaseModel):
+    """Create a custom (private) Food owned by the caller.
+
+    Macros are **per serving** (one serving = ``serving_size`` of ``serving_unit``),
+    matching the catalog convention. The created Food is ``source='custom'`` and
+    private to the caller, usable in the diary like any Food.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    brand: str | None = Field(default=None, max_length=200)
+    serving_size: float = Field(gt=0, le=100000)
+    serving_unit: str = Field(min_length=1, max_length=40)
+    calories: float = Field(ge=0, le=100000)
+    protein_g: float = Field(ge=0, le=100000)
+    carbs_g: float = Field(ge=0, le=100000)
+    fat_g: float = Field(ge=0, le=100000)
+    model_config = {"extra": "forbid"}
+
+
+class FoodUpdate(BaseModel):
+    """Edit one of the caller's own custom Foods (only sent fields change).
+
+    Editing a custom Food recomputes any Recipe that uses it as an ingredient (so
+    a Recipe's stored macros stay correct). Only ``source='custom'`` Foods are
+    editable — shared (generic/OFF) and recipe-backed Foods are not.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    brand: str | None = Field(default=None, max_length=200)
+    serving_size: float | None = Field(default=None, gt=0, le=100000)
+    serving_unit: str | None = Field(default=None, min_length=1, max_length=40)
+    calories: float | None = Field(default=None, ge=0, le=100000)
+    protein_g: float | None = Field(default=None, ge=0, le=100000)
+    carbs_g: float | None = Field(default=None, ge=0, le=100000)
+    fat_g: float | None = Field(default=None, ge=0, le=100000)
+    model_config = {"extra": "forbid"}
+
+
+# --------------------------------------------------------------------------- #
+# Recipes (#22) — a user-defined Food composed of other Foods
+# --------------------------------------------------------------------------- #
+
+
+class RecipeIngredientInput(BaseModel):
+    """One ingredient in a Recipe: a Food id and a quantity (number of servings)."""
+
+    food_id: uuid.UUID
+    quantity: float = Field(gt=0, le=10000)
+    model_config = {"extra": "forbid"}
+
+
+class RecipeCreate(BaseModel):
+    """Create a Recipe: a name, a yield (servings the recipe makes), ingredients.
+
+    Per-serving macros are **computed** from the ingredient Foods (Σ ÷ yield) — not
+    supplied. At least one ingredient is required.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    yield_servings: float = Field(gt=0, le=10000)
+    ingredients: list[RecipeIngredientInput] = Field(min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class RecipeUpdate(BaseModel):
+    """Replace a Recipe's name/yield/ingredients (recomputes macros)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    yield_servings: float = Field(gt=0, le=10000)
+    ingredients: list[RecipeIngredientInput] = Field(min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class RecipeIngredientRead(BaseModel):
+    """One ingredient in a Recipe detail: the Food + the quantity used."""
+
+    food_id: uuid.UUID
+    food_name: str
+    quantity: float
+    serving_size: float
+    serving_unit: str
+    # The ingredient's contribution at its quantity (per-serving macros × quantity).
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+
+
+class RecipeRead(BaseModel):
+    """A Recipe: its backing Food (id + computed per-serving macros) + ingredients.
+
+    ``food_id`` is the id to log to the diary — a Recipe is loggable exactly like a
+    Food. The macros here are the Recipe's computed **per-serving** values.
+    """
+
+    id: uuid.UUID
+    food_id: uuid.UUID
+    name: str
+    yield_servings: float
+    # The computed per-serving macros (stored on the backing Food).
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    ingredients: list[RecipeIngredientRead]

@@ -18,14 +18,17 @@ for them (nullable ``user_id`` + ``source`` + ``off_id``).
 import datetime as dt
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.diary_entry import DiaryEntry, Meal
 from app.models.food import Food
+from app.models.recipe import Recipe, RecipeIngredient
 from app.models.user import User
 from app.schemas.nutrition import (
     DiaryDayRead,
@@ -33,11 +36,33 @@ from app.schemas.nutrition import (
     DiaryEntryCreate,
     DiaryEntryRead,
     DiaryEntryUpdate,
+    FoodCreate,
     FoodRead,
+    FoodUpdate,
     MacroTotalsRead,
     MealSection,
+    RecipeCreate,
+    RecipeIngredientRead,
+    RecipeRead,
+    RecipeUpdate,
 )
 from app.services.nutrition import EntryMacros, MacroTotals, daily_totals
+from app.services.off import is_valid_barcode
+from app.services.off_lookup import lookup_barcode
+from app.services.recipe import RecipeMacroError
+from app.services.recipe_query import (
+    RecipeIngredientInput,
+    RecipeVisibilityError,
+    create_recipe,
+    delete_recipe,
+    load_recipe_with_ingredients,
+    recompute_recipes_using_food,
+    update_recipe,
+)
+
+# A custom Food the user owns — the only kind a user may edit/delete (shared
+# generic/OFF rows and recipe-backed Foods are managed by the system / the Recipe).
+CUSTOM_SOURCE = "custom"
 
 router = APIRouter()
 
@@ -45,6 +70,17 @@ router = APIRouter()
 def _visible_food_filter(user_id: int):
     """The catalog visibility rule: shared (NULL user_id) ∪ the caller's own."""
     return or_(Food.user_id.is_(None), Food.user_id == user_id)
+
+
+def _custom_food_slug(name: str) -> str:
+    """A readable, unique-per-user natural key for a custom Food.
+
+    Mirrors the custom-Exercise slug; per-user uniqueness is enforced by
+    ``uq_food_user_slug`` and the random suffix avoids same-name collisions.
+    """
+    cleaned = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
+    cleaned = "-".join(filter(None, cleaned.split("-")))
+    return f"custom-{cleaned or 'food'}-{uuid.uuid4().hex[:8]}"
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +127,152 @@ async def _get_visible_food(
             status_code=status.HTTP_404_NOT_FOUND, detail="Food not found"
         )
     return food
+
+
+# --------------------------------------------------------------------------- #
+# Barcode → Open Food Facts → cached Food (#22)
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/barcode/{code}", response_model=FoodRead)
+async def resolve_barcode(
+    code: str = Path(description="A retail barcode (EAN/UPC, digits only)."),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FoodRead:
+    """Resolve a scanned barcode to a Food via Open Food Facts (cache-first).
+
+    The first scan of a barcode fetches OFF, maps the per-100g macros into a
+    shared ``source='off'`` Food, and caches it; repeat scans hit the cache (no
+    network). A barcode OFF doesn't know, or whose macros are incomplete, is a
+    404 — the client falls back to manual entry / custom Food (never a garbage
+    Food). Obvious junk (non-digit) input is rejected up front (422) without a
+    network call.
+    """
+    if not is_valid_barcode(code):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Not a valid barcode",
+        )
+    food = await lookup_barcode(db, code)
+    if food is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No product found for this barcode",
+        )
+    return FoodRead.model_validate(food)
+
+
+# --------------------------------------------------------------------------- #
+# Custom Foods (#22) — a user's own private Food
+# --------------------------------------------------------------------------- #
+
+
+async def _get_own_custom_food(
+    db: AsyncSession, food_id: uuid.UUID, user: User
+) -> Food:
+    """Load one of the caller's own custom Foods, or 404.
+
+    Only ``source='custom'`` Foods owned by the caller are editable/deletable;
+    shared (generic/OFF) and recipe-backed Foods are not the user's to mutate
+    here, so they 404 (no existence leak, and recipe Foods are managed via the
+    Recipe endpoints).
+    """
+    stmt = select(Food).where(
+        Food.id == food_id,
+        Food.user_id == user.id,
+        Food.source == CUSTOM_SOURCE,
+    )
+    food = (await db.execute(stmt)).scalar_one_or_none()
+    if food is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Custom food not found"
+        )
+    return food
+
+
+@router.post(
+    "/foods", response_model=FoodRead, status_code=status.HTTP_201_CREATED
+)
+async def create_custom_food(
+    payload: FoodCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FoodRead:
+    """Create a custom (private) Food owned by the caller (per-serving macros)."""
+    brand = payload.brand.strip() if payload.brand and payload.brand.strip() else None
+    food = Food(
+        user_id=user.id,
+        slug=_custom_food_slug(payload.name),
+        name=payload.name,
+        brand=brand,
+        serving_size=payload.serving_size,
+        serving_unit=payload.serving_unit,
+        calories=payload.calories,
+        protein_g=payload.protein_g,
+        carbs_g=payload.carbs_g,
+        fat_g=payload.fat_g,
+        source=CUSTOM_SOURCE,
+    )
+    db.add(food)
+    await db.flush()
+    await db.refresh(food)
+    return FoodRead.model_validate(food)
+
+
+@router.patch("/foods/{food_id}", response_model=FoodRead)
+async def update_custom_food(
+    food_id: uuid.UUID,
+    payload: FoodUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FoodRead:
+    """Edit one of the caller's own custom Foods (only sent fields change).
+
+    Editing a custom Food's macros recomputes any Recipe that uses it as an
+    ingredient, so dependent Recipes' stored per-serving macros stay correct.
+    """
+    food = await _get_own_custom_food(db, food_id, user)
+    fields = payload.model_dump(exclude_unset=True)
+    for attr in (
+        "name", "serving_size", "serving_unit",
+        "calories", "protein_g", "carbs_g", "fat_g",
+    ):
+        if attr in fields and fields[attr] is not None:
+            setattr(food, attr, fields[attr])
+    if "brand" in fields:
+        brand = fields["brand"]
+        food.brand = brand.strip() if isinstance(brand, str) and brand.strip() else None
+
+    await db.flush()
+    # Compute-on-write fan-out: any Recipe using this Food recomputes its macros.
+    await recompute_recipes_using_food(db, food.id)
+    await db.refresh(food)
+    return FoodRead.model_validate(food)
+
+
+@router.delete("/foods/{food_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_custom_food(
+    food_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete one of the caller's own custom Foods.
+
+    A Food still referenced by a Diary Entry or a Recipe ingredient can't be
+    deleted (the RESTRICT FKs) — that surfaces as a 409 rather than a 500, so the
+    client can tell the user to remove the references first.
+    """
+    food = await _get_own_custom_food(db, food_id, user)
+    await db.delete(food)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This food is in use (a diary entry or recipe) and can't be deleted.",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -283,3 +465,201 @@ async def get_history(
         )
         for day, day_entries in sorted(by_day.items())
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Recipes (#22) — a user-defined Food composed of other Foods
+# --------------------------------------------------------------------------- #
+
+
+def _recipe_read(recipe: Recipe, food: Food) -> RecipeRead:
+    """Build the API view of a Recipe from its ORM row + backing Food.
+
+    The Recipe's per-serving macros are read off the backing Food (computed at
+    write time). Each ingredient row reports its contribution at its quantity
+    (the ingredient Food's per-serving macros × quantity).
+    """
+    ingredients = [
+        RecipeIngredientRead(
+            food_id=ing.food_id,
+            food_name=ing.food.name,
+            quantity=ing.quantity,
+            serving_size=ing.food.serving_size,
+            serving_unit=ing.food.serving_unit,
+            calories=ing.food.calories * ing.quantity,
+            protein_g=ing.food.protein_g * ing.quantity,
+            carbs_g=ing.food.carbs_g * ing.quantity,
+            fat_g=ing.food.fat_g * ing.quantity,
+        )
+        for ing in recipe.ingredients
+    ]
+    # Macros are the exact stored per-serving values (the Food is the source of
+    # truth); the client formats them for display (1dp), like FoodRead.
+    return RecipeRead(
+        id=recipe.id,
+        food_id=recipe.food_id,
+        name=food.name,
+        yield_servings=recipe.yield_servings,
+        calories=food.calories,
+        protein_g=food.protein_g,
+        carbs_g=food.carbs_g,
+        fat_g=food.fat_g,
+        ingredients=ingredients,
+    )
+
+
+async def _get_owned_recipe(
+    db: AsyncSession, recipe_id: uuid.UUID, user: User
+) -> Recipe:
+    """Load a Recipe owned by the caller (ingredients + their Foods loaded), or 404."""
+    recipe = await load_recipe_with_ingredients(db, recipe_id, user_id=user.id)
+    if recipe is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Recipe not found"
+        )
+    return recipe
+
+
+async def _recipe_food(db: AsyncSession, recipe: Recipe) -> Food:
+    """The backing Food for a Recipe (holds the computed per-serving macros)."""
+    return (
+        await db.execute(select(Food).where(Food.id == recipe.food_id))
+    ).scalar_one()
+
+
+def _ingredient_inputs(payload) -> list[RecipeIngredientInput]:
+    return [
+        RecipeIngredientInput(food_id=i.food_id, quantity=i.quantity)
+        for i in payload.ingredients
+    ]
+
+
+@router.get("/recipes", response_model=list[RecipeRead])
+async def list_recipes(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[RecipeRead]:
+    """List the caller's own Recipes (each with its computed macros + ingredients)."""
+    recipes = (
+        await db.execute(
+            select(Recipe)
+            .where(Recipe.user_id == user.id)
+            .options(
+                selectinload(Recipe.ingredients).selectinload(RecipeIngredient.food)
+            )
+            .order_by(Recipe.id)
+        )
+    ).scalars().all()
+    if not recipes:
+        return []
+    foods = {
+        f.id: f
+        for f in (
+            await db.execute(
+                select(Food).where(Food.id.in_([r.food_id for r in recipes]))
+            )
+        ).scalars().all()
+    }
+    return [_recipe_read(r, foods[r.food_id]) for r in recipes]
+
+
+@router.post(
+    "/recipes", response_model=RecipeRead, status_code=status.HTTP_201_CREATED
+)
+async def create_recipe_endpoint(
+    payload: RecipeCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RecipeRead:
+    """Create a Recipe: name + yield + ingredients → a loggable, computed Food.
+
+    Per-serving macros are computed (Σ ingredient macros ÷ yield). An ingredient
+    Food not visible to the caller is a 404 (no leak of another user's Food).
+    """
+    try:
+        recipe = await create_recipe(
+            db,
+            user=user,
+            name=payload.name,
+            yield_servings=payload.yield_servings,
+            ingredients=_ingredient_inputs(payload),
+        )
+    except RecipeVisibilityError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="An ingredient food was not found",
+        )
+    except RecipeMacroError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+    # Reload so the ingredients' Foods are materialised for the response.
+    loaded = await _get_owned_recipe(db, recipe.id, user)
+    food = await _recipe_food(db, loaded)
+    return _recipe_read(loaded, food)
+
+
+@router.get("/recipes/{recipe_id}", response_model=RecipeRead)
+async def get_recipe(
+    recipe_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RecipeRead:
+    """Fetch one of the caller's Recipes."""
+    recipe = await _get_owned_recipe(db, recipe_id, user)
+    food = await _recipe_food(db, recipe)
+    return _recipe_read(recipe, food)
+
+
+@router.patch("/recipes/{recipe_id}", response_model=RecipeRead)
+async def update_recipe_endpoint(
+    recipe_id: uuid.UUID,
+    payload: RecipeUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RecipeRead:
+    """Replace a Recipe's name/yield/ingredients; recomputes its per-serving macros."""
+    recipe = await _get_owned_recipe(db, recipe_id, user)
+    try:
+        await update_recipe(
+            db,
+            recipe=recipe,
+            user=user,
+            name=payload.name,
+            yield_servings=payload.yield_servings,
+            ingredients=_ingredient_inputs(payload),
+        )
+    except RecipeVisibilityError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="An ingredient food was not found",
+        )
+    except RecipeMacroError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+    loaded = await _get_owned_recipe(db, recipe.id, user)
+    food = await _recipe_food(db, loaded)
+    return _recipe_read(loaded, food)
+
+
+@router.delete("/recipes/{recipe_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recipe_endpoint(
+    recipe_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete one of the caller's Recipes (its backing Food is removed too).
+
+    If the Recipe's backing Food is still logged in the diary, the RESTRICT FK
+    surfaces as a 409 rather than a 500 — remove the diary entries first.
+    """
+    recipe = await _get_owned_recipe(db, recipe_id, user)
+    try:
+        await delete_recipe(db, recipe)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This recipe is logged in your diary and can't be deleted.",
+        )

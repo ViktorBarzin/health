@@ -442,6 +442,49 @@ async def test_export_includes_diary_entries_when_nutrition_tables_exist(
     assert csv_rows[0]["meal"] == "lunch"
 
 
+async def test_export_includes_recipes_when_table_exists(client, db_session) -> None:
+    """A user's Recipes (#22) round-trip through the export, per-user scoped.
+
+    ``recipes`` carries ``user_id`` so the optional-table reflection path includes
+    it (and scopes it to the caller). Another user's Recipe never appears.
+    """
+    from app.models.food import Food
+    from app.services.recipe_query import RecipeIngredientInput, create_recipe
+
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+
+    shared = Food(
+        slug="oats-recipe-export", name="Oats", user_id=None,
+        serving_size=100, serving_unit="g",
+        calories=389, protein_g=17, carbs_g=66, fat_g=7, source="generic",
+    )
+    db_session.add(shared)
+    await db_session.flush()
+
+    await create_recipe(
+        db_session, user=alice, name="Alice's Porridge", yield_servings=2,
+        ingredients=[RecipeIngredientInput(food_id=shared.id, quantity=1)],
+    )
+    await create_recipe(
+        db_session, user=bob, name="Bob's Porridge", yield_servings=1,
+        ingredients=[RecipeIngredientInput(food_id=shared.id, quantity=1)],
+    )
+    await db_session.flush()
+
+    client.set_user(alice)
+    resp = await client.get("/api/export")
+    assert resp.status_code == 200
+    members = _unzip(resp.content)
+    import json
+
+    recipes = json.loads(members["export.json"])["records"]["recipes"]
+    assert len(recipes) == 1  # only Alice's
+    assert recipes[0]["user_id"] == alice.id
+    assert float(recipes[0]["yield_servings"]) == 2.0
+    assert "csv/recipes.csv" in members
+
+
 # --- Streaming: the response is chunked, not one in-memory blob -------------
 
 

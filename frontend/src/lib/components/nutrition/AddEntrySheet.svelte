@@ -1,12 +1,19 @@
 <script lang="ts">
   import { api } from '$lib/api';
+  import BarcodeScanner from '$lib/components/nutrition/BarcodeScanner.svelte';
+  import CustomFoodForm from '$lib/components/nutrition/CustomFoodForm.svelte';
+  import RecipeBuilder from '$lib/components/nutrition/RecipeBuilder.svelte';
   import { entryMacros, formatMacro, formatServing } from '$lib/nutrition';
-  import type { DiaryEntry, Food, Meal } from '$lib/types';
+  import type { DiaryEntry, Food, Meal, Recipe } from '$lib/types';
 
-  // A mobile bottom-sheet for adding (or editing) a Diary Entry: search the Food
-  // catalog → pick a Food → set the quantity (servings) and Meal → save.
-  // Server-side Food search, debounced. On edit, it opens pre-seeded on the
-  // quantity step for the entry's existing Food/quantity/meal.
+  // A mobile bottom-sheet for adding (or editing) a Diary Entry. Several ways to
+  // pick a Food, all converging on the quantity + Meal "detail" step:
+  //   - search the catalog (server-side, debounced) — the default;
+  //   - SCAN a barcode (#22): native BarcodeDetector / @zxing fallback → resolve
+  //     via Open Food Facts (cached) → log; graceful fallback to search/manual;
+  //   - create a custom Food (#22), private to the user;
+  //   - build a Recipe (#22) — a Food composed of other Foods, computed macros.
+  // On edit, it opens pre-seeded on the detail step for the entry's Food.
   let {
     open = false,
     date,
@@ -28,20 +35,21 @@
 
   const MEALS: Meal[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
-  // Two steps: 'search' (pick a Food) → 'detail' (quantity + meal).
-  let step = $state<'search' | 'detail'>('search');
+  // Steps: pick a Food ('search' | 'scan' | 'custom' | 'recipe') → 'detail'.
+  type Step = 'search' | 'scan' | 'custom' | 'recipe' | 'detail';
+  let step = $state<Step>('search');
   let foods = $state<Food[]>([]);
   let search = $state('');
   let loading = $state(false);
   let error = $state('');
+  let scanMessage = $state('');
 
   let selected = $state<Food | null>(null);
   let quantity = $state(1);
   let meal = $state<Meal>('breakfast');
   let saving = $state(false);
 
-  // Seed the sheet each time it opens: edit → jump to the detail step with the
-  // entry's Food/quantity/meal; add → start at search in the tapped Meal.
+  // Seed the sheet each time it opens: edit → detail step; add → search.
   let seeded = $state(false);
   $effect(() => {
     if (open && !seeded) {
@@ -53,7 +61,6 @@
           brand: edit.brand,
           serving_size: edit.serving_size,
           serving_unit: edit.serving_unit,
-          // Per-serving macros recovered from the entry (macros ÷ quantity).
           calories: edit.quantity ? edit.calories / edit.quantity : 0,
           protein_g: edit.quantity ? edit.protein_g / edit.quantity : 0,
           carbs_g: edit.quantity ? edit.carbs_g / edit.quantity : 0,
@@ -72,6 +79,7 @@
         search = '';
       }
       error = '';
+      scanMessage = '';
     } else if (!open && seeded) {
       seeded = false;
     }
@@ -107,11 +115,62 @@
     step = 'detail';
   }
 
+  // --- Barcode scanning (#22) ---
+  let resolving = $state(false);
+  async function onBarcode(code: string) {
+    if (resolving) return;
+    resolving = true;
+    scanMessage = 'Looking up product…';
+    error = '';
+    try {
+      const food = await api.get<Food>(`/api/nutrition/barcode/${code}`);
+      // Resolved + cached → straight to the quantity step.
+      pickFood(food);
+    } catch (err) {
+      // Not found / incomplete macros → fall back to search/manual entry.
+      const status = (err as { status?: number })?.status;
+      scanMessage =
+        status === 404
+          ? 'No product found for that barcode. Search or add it manually.'
+          : 'Could not look up that barcode. Search or add it manually.';
+      step = 'search';
+      search = '';
+    } finally {
+      resolving = false;
+    }
+  }
+
+  function onScanFallback(reason: string) {
+    // Camera unavailable / denied → drop back to search with a hint.
+    scanMessage = reason;
+    step = 'search';
+  }
+
+  // --- Custom Food / Recipe creation flow into the detail step ---
+  function onCustomCreated(food: Food) {
+    pickFood(food);
+  }
+  function onRecipeCreated(recipe: Recipe) {
+    // A Recipe is loggable as its backing Food.
+    pickFood({
+      id: recipe.food_id,
+      name: recipe.name,
+      brand: null,
+      serving_size: 1,
+      serving_unit: 'serving',
+      calories: recipe.calories,
+      protein_g: recipe.protein_g,
+      carbs_g: recipe.carbs_g,
+      fat_g: recipe.fat_g,
+      is_custom: true,
+      source: 'recipe',
+    });
+  }
+
   function stepQuantity(delta: number) {
     quantity = Math.max(0.1, Math.round((quantity + delta) * 100) / 100);
   }
 
-  // Live macro preview for the chosen Food at the current quantity.
   let preview = $derived(
     selected
       ? entryMacros(selected, quantity)
@@ -149,6 +208,15 @@
   function mealLabel(m: Meal): string {
     return m.charAt(0).toUpperCase() + m.slice(1);
   }
+
+  function headerTitle(): string {
+    if (edit) return 'Edit entry';
+    if (step === 'detail') return selected?.name ?? 'Add food';
+    if (step === 'scan') return 'Scan barcode';
+    if (step === 'custom') return 'New custom food';
+    if (step === 'recipe') return 'New recipe';
+    return 'Add food';
+  }
 </script>
 
 {#if open}
@@ -156,7 +224,7 @@
   <div
     class="fixed bottom-0 inset-x-0 z-50 bg-surface-900 border-t border-surface-700
            rounded-t-2xl pb-[env(safe-area-inset-bottom)] shadow-2xl flex flex-col"
-    style="max-height: 85vh;"
+    style="max-height: 88vh;"
     role="dialog"
     aria-label={edit ? 'Edit diary entry' : 'Add food'}
   >
@@ -165,16 +233,14 @@
     <div class="px-4 pb-3 shrink-0">
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-          {#if step === 'detail' && !edit}
-            <button onclick={() => (step = 'search')} class="text-surface-400 hover:text-surface-200 p-1" aria-label="Back">
+          {#if step !== 'search' && !edit}
+            <button onclick={() => { step = 'search'; }} class="text-surface-400 hover:text-surface-200 p-1" aria-label="Back">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
               </svg>
             </button>
           {/if}
-          <h2 class="text-base font-semibold text-surface-100">
-            {edit ? 'Edit entry' : step === 'search' ? 'Add food' : selected?.name}
-          </h2>
+          <h2 class="text-base font-semibold text-surface-100">{headerTitle()}</h2>
         </div>
         <button onclick={onclose} class="text-surface-400 hover:text-surface-200 p-1" aria-label="Close">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -199,6 +265,29 @@
                    focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
           />
         </div>
+
+        <!-- Quick actions: scan / custom / recipe -->
+        <div class="grid grid-cols-3 gap-2 mt-2">
+          <button onclick={() => { scanMessage = ''; step = 'scan'; }}
+            class="flex flex-col items-center gap-1 py-2 rounded-lg bg-surface-800 border border-surface-700 text-surface-300 hover:border-primary-500/50 hover:text-primary-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v2.25M3.75 19.125c0 .621.504 1.125 1.125 1.125h2.25a1.125 1.125 0 001.125-1.125v-2.25M19.5 4.875c0-.621-.504-1.125-1.125-1.125h-2.25a1.125 1.125 0 00-1.125 1.125v2.25M19.5 19.125c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-2.25M8.25 12h7.5" /></svg>
+            <span class="text-[0.65rem] font-medium">Scan</span>
+          </button>
+          <button onclick={() => { step = 'custom'; }}
+            class="flex flex-col items-center gap-1 py-2 rounded-lg bg-surface-800 border border-surface-700 text-surface-300 hover:border-primary-500/50 hover:text-primary-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span class="text-[0.65rem] font-medium">Custom</span>
+          </button>
+          <button onclick={() => { step = 'recipe'; }}
+            class="flex flex-col items-center gap-1 py-2 rounded-lg bg-surface-800 border border-surface-700 text-surface-300 hover:border-primary-500/50 hover:text-primary-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75A2.25 2.25 0 015.25 4.5h13.5A2.25 2.25 0 0121 6.75v10.5A2.25 2.25 0 0118.75 19.5H5.25A2.25 2.25 0 013 17.25V6.75zM7.5 8.25h9M7.5 12h9m-9 3.75h5.25" /></svg>
+            <span class="text-[0.65rem] font-medium">Recipe</span>
+          </button>
+        </div>
+
+        {#if scanMessage}
+          <p class="mt-2 text-xs text-amber-400">{scanMessage}</p>
+        {/if}
       {/if}
     </div>
 
@@ -232,7 +321,9 @@
                       {#if f.brand}· {f.brand}{/if}
                     </p>
                   </div>
-                  {#if f.is_custom}
+                  {#if f.source === 'recipe'}
+                    <span class="shrink-0 text-[0.55rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">Recipe</span>
+                  {:else if f.is_custom}
                     <span class="shrink-0 text-[0.55rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-300">Custom</span>
                   {/if}
                 </button>
@@ -240,7 +331,19 @@
             {/each}
           </ul>
         {/if}
-      {:else if selected}
+      {:else if step === 'scan'}
+        <BarcodeScanner active={open && step === 'scan'} ondetected={onBarcode} onfallback={onScanFallback} />
+        {#if resolving}
+          <p class="mt-3 text-center text-sm text-primary-300">Looking up product…</p>
+        {/if}
+        <button onclick={() => { step = 'search'; }} class="mt-3 w-full py-2.5 rounded-lg bg-surface-800 border border-surface-700 text-sm text-surface-300 hover:bg-surface-700">
+          Enter manually instead
+        </button>
+      {:else if step === 'custom'}
+        <CustomFoodForm oncreated={onCustomCreated} oncancel={() => { step = 'search'; }} />
+      {:else if step === 'recipe'}
+        <RecipeBuilder oncreated={onRecipeCreated} oncancel={() => { step = 'search'; }} />
+      {:else if step === 'detail' && selected}
         <!-- Quantity stepper -->
         <div class="mb-5">
           <p class="text-sm font-medium text-surface-300 mb-2">Servings</p>
