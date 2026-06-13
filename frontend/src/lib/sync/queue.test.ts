@@ -347,6 +347,66 @@ describe('collapseQueue — drop ops that cancel out (the LWW / no-churn rule)',
     const collapsed = applyOps(undefined, collapseQueue(q), sid);
     expect(collapsed).toEqual(raw);
   });
+
+  // --- reorderSets × collapse (regression: a reorder naming a dropped set must
+  // not survive collapse still referencing that phantom id, or the server
+  // reorder 400s and the engine drops it — losing the reorder entirely). ---
+
+  it('prunes a dropped set out of a reorderSets payload (created-then-deleted offline)', () => {
+    const sid = 's1';
+    // Offline: add b, reorder [b, a], then delete b — b never reaches the server.
+    const q: SyncOp[] = [
+      addSetOp(sid, makeSet({ id: 'b', exercise_id: 'ex1' })),
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['b', 'a'] } },
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'b' },
+    ];
+    const collapsed = collapseQueue(q);
+    // b's add+delete vanish; the surviving reorder no longer names the phantom b.
+    expect(collapsed.map((o) => o.kind)).toEqual(['reorderSets']);
+    const reorder = collapsed[0];
+    if (reorder.kind !== 'reorderSets') throw new Error('expected reorderSets');
+    expect(reorder.payload.set_ids).toEqual(['a']);
+  });
+
+  it('drops a reorderSets op entirely when collapse empties its set_ids', () => {
+    const sid = 's1';
+    // Both reordered sets are created-then-deleted locally → the reorder is moot.
+    const q: SyncOp[] = [
+      addSetOp(sid, makeSet({ id: 'a', exercise_id: 'ex1' })),
+      addSetOp(sid, makeSet({ id: 'b', exercise_id: 'ex1' })),
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['b', 'a'] } },
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'a' },
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'b' },
+    ];
+    expect(collapseQueue(q)).toEqual([]);
+  });
+
+  it('keeps reorderSets ids that are NOT dropped (mix of server-known + surviving local)', () => {
+    const sid = 's1';
+    const q: SyncOp[] = [
+      addSetOp(sid, makeSet({ id: 'c', exercise_id: 'ex1' })), // surviving local create
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['c', 'a', 'b'] } },
+    ];
+    // a + b are server-known (no local create); c survives → all three kept, order intact.
+    const collapsed = collapseQueue(q);
+    const reorder = collapsed.find((o) => o.kind === 'reorderSets');
+    if (!reorder || reorder.kind !== 'reorderSets') throw new Error('expected reorderSets');
+    expect(reorder.payload.set_ids).toEqual(['c', 'a', 'b']);
+  });
+
+  it('reorderSets pruning is replay-invariant (collapsed snapshot == raw snapshot)', () => {
+    const sid = 's1';
+    const q: SyncOp[] = [
+      startOp(sid),
+      addSetOp(sid, makeSet({ id: 'a', exercise_id: 'ex1' })),
+      addSetOp(sid, makeSet({ id: 'b', exercise_id: 'ex1' })),
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['b', 'a'] } },
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'b' },
+    ];
+    const raw = applyOps(undefined, q, sid);
+    const collapsed = applyOps(undefined, collapseQueue(q), sid);
+    expect(collapsed).toEqual(raw);
+  });
 });
 
 describe('reconcileServerSession — merge authoritative server state with pending local ops', () => {

@@ -24,6 +24,7 @@ import { ApiError, api } from '$lib/api';
 import type { SessionDetail } from '$lib/types';
 import {
   collapseQueue,
+  reorderForSend,
   type SyncOp,
 } from './queue';
 import {
@@ -148,7 +149,12 @@ async function sendOp(op: SyncOp): Promise<SessionDetail | void> {
         { set_ids: op.payload.set_ids },
       );
     case 'finishSession':
-      return api.post<SessionDetail>(`/api/sessions/${op.sessionId}/finish`);
+      // Send the client's finish time so a later sync records when the user
+      // actually finished (not server-receipt time) and the end time doesn't
+      // flicker to the server clock on reconcile.
+      return api.post<SessionDetail>(`/api/sessions/${op.sessionId}/finish`, {
+        ended_at: op.payload.ended_at,
+      });
     case 'deleteSession':
       await api.delete(`/api/sessions/${op.sessionId}`);
       return;
@@ -197,11 +203,19 @@ export async function drain(): Promise<void> {
   try {
     await collapse();
 
+    // Ops sent earlier in THIS pass, in order — used to re-derive a reorder's
+    // set_ids against deletes that already went out (so it stays a valid
+    // permutation of what the server now holds; see `reorderForSend`).
+    const processed: SyncOp[] = [];
+
     // Walk a snapshot of the queue head-first. Each delivered op is removed
     // from both mirrors; a transient failure stops the walk (order preserved).
     while (queue.length > 0) {
       if (!isOnline()) break;
-      const op = queue[0];
+      const head = queue[0];
+      // For a reorder, strip ids that earlier-drained deletes already removed.
+      const op =
+        head.kind === 'reorderSets' ? reorderForSend(head, processed) : head;
       try {
         const res = await sendOp(op);
         touched.add(op.sessionId);
@@ -220,9 +234,11 @@ export async function drain(): Promise<void> {
           break;
         }
       }
-      // Remove the just-handled head (delivered or dropped-permanent).
+      // Delivered or dropped-permanent: record it (so a later reorder can be
+      // re-derived against it) and remove the head from both mirrors.
+      processed.push(head);
       queue = queue.slice(1);
-      await removeOp(op.opId);
+      await removeOp(head.opId);
       refreshPending();
     }
 

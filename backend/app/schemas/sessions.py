@@ -171,6 +171,19 @@ class SessionCreate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SessionFinish(BaseModel):
+    """Finish a Session. ``ended_at`` defaults to now() server-side if omitted.
+
+    The offline logger (ADR-0005, #6) supplies the moment the user actually tapped
+    *finish* at the gym — which is both more correct than the server-receipt time
+    (a finish may sync hours later) and stops the displayed end time flickering
+    from the optimistic value to a server clock on reconcile.
+    """
+
+    ended_at: datetime | None = None
+    model_config = {"extra": "forbid"}
+
+
 class SessionSummary(BaseModel):
     """List-view shape for a Session: timing plus derived counts and volume.
 

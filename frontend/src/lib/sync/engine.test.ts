@@ -205,4 +205,55 @@ describe('engine drain orchestration', () => {
     // 404-on-delete == success: the op is dropped, queue empties.
     expect(queueLength()).toBe(0);
   });
+
+  it('drops a PERMANENT 400 reorder rather than wedging the queue', async () => {
+    // Pins the engine's drop-on-permanent for a reorder specifically: even if a
+    // stale set_ids slips through to a strict server, a 400 must not wedge.
+    const sid = `s-${newOpId()}`;
+    await stage([
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['x', 'y'] } },
+      addSetOp(sid, `after-${newOpId()}`),
+    ]);
+    failer = (path, method) => {
+      if (method === 'PUT' && path.endsWith('/sets/order')) {
+        throw new ApiError(400, { detail: 'not a permutation' });
+      }
+    };
+    await drain();
+    // Reorder dropped (permanent 4xx), the following add still delivered.
+    expect(queueLength()).toBe(0);
+    expect(calls.some((c) => c.path.endsWith('/sets'))).toBe(true);
+  });
+
+  it('re-derives a reorder set_ids at SEND time, stripping a set deleted earlier in the queue', async () => {
+    // Repro #2: server-known {a, b}; offline the user deletes a, THEN reorders
+    // to [b, a]. FIFO drains delete(a) first → the reorder must go out as [b]
+    // (a is gone), not the stale [b, a] that a strict server would reject.
+    const sid = `s-${newOpId()}`;
+    await stage([
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'a' },
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['b', 'a'] } },
+    ]);
+    await drain();
+
+    const reorder = calls.find((c) => c.path.endsWith('/sets/order'))!;
+    expect(reorder).toBeTruthy();
+    expect((reorder.body as { set_ids: string[] }).set_ids).toEqual(['b']);
+    expect(queueLength()).toBe(0);
+  });
+
+  it('leaves a reorder set_ids intact when its delete comes AFTER it (order-aware)', async () => {
+    // The mirror case: reorder [b, a] is queued BEFORE delete(b). At reorder
+    // send time b still exists server-side, so the reorder goes out as-is; the
+    // later delete removes b. Stripping b here would be wrong.
+    const sid = `s-${newOpId()}`;
+    await stage([
+      { opId: newOpId(), kind: 'reorderSets', sessionId: sid, payload: { set_ids: ['b', 'a'] } },
+      { opId: newOpId(), kind: 'deleteSet', sessionId: sid, setId: 'b' },
+    ]);
+    await drain();
+
+    const reorder = calls.find((c) => c.path.endsWith('/sets/order'))!;
+    expect((reorder.body as { set_ids: string[] }).set_ids).toEqual(['b', 'a']);
+  });
 });

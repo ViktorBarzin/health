@@ -115,6 +115,26 @@ async def test_finish_session_sets_end_time_and_is_idempotent(client, db_session
     assert again.json()["ended_at"] == first_end
 
 
+async def test_finish_session_honours_client_ended_at(client, db_session) -> None:
+    # The offline logger supplies when the user actually tapped finish (ADR-0005)
+    # — more correct than server-receipt time and stops the end time flickering
+    # on reconcile. Honoured on first finish; a replay leaves it untouched.
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    ended = "2026-06-13T18:30:00+00:00"
+    resp = await client.post(f"/api/sessions/{sid}/finish", json={"ended_at": ended})
+    assert resp.status_code == 200
+    assert resp.json()["ended_at"].startswith("2026-06-13T18:30:00")
+
+    # A replay carrying a different time does NOT move the recorded end (idempotent).
+    replay = await client.post(
+        f"/api/sessions/{sid}/finish", json={"ended_at": "2026-06-13T19:00:00+00:00"}
+    )
+    assert replay.json()["ended_at"].startswith("2026-06-13T18:30:00")
+
+
 async def test_list_filters_active_vs_finished(client, db_session) -> None:
     alice = await _make_user(db_session, "alice@example.com")
     client.set_user(alice)
@@ -374,7 +394,44 @@ async def test_reorder_sets_rewrites_indices(client, db_session) -> None:
     assert [s["order_index"] for s in resp.json()["sets"]] == [0, 1, 2]
 
 
-async def test_reorder_rejects_wrong_id_set(client, db_session) -> None:
+async def test_reorder_tolerates_unknown_ids_and_appends_unnamed(client, db_session) -> None:
+    # The reorder endpoint is TOLERANT (ADR-0005, #6): an offline reorder may
+    # carry a stale set_ids (an id the server has since lost, or — after a queue
+    # races with deletes — one it never had). Rather than 400 (which made the
+    # engine drop the op and silently LOSE the reorder), it reindexes the valid
+    # subset it's given, ignores unknown ids, and appends any current Sets the
+    # list didn't name — so the result is always a valid, gap-free permutation.
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    ids = []
+    for r in (5, 6, 7):
+        ids.append(
+            (
+                await client.post(
+                    f"/api/sessions/{sid}/sets",
+                    json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": r},
+                )
+            ).json()["id"]
+        )
+    a, b, c = ids
+
+    # Name only [c, a] (b omitted) plus a phantom id. The phantom is ignored,
+    # c & a take the front in that order, and the unnamed b is appended.
+    resp = await client.put(
+        f"/api/sessions/{sid}/sets/order",
+        json={"set_ids": [c, str(uuid.uuid4()), a]},
+    )
+    assert resp.status_code == 200
+    ordered = [s["id"] for s in resp.json()["sets"]]
+    assert ordered == [c, a, b]
+    assert [s["order_index"] for s in resp.json()["sets"]] == [0, 1, 2]
+
+
+async def test_reorder_all_unknown_ids_is_noop_not_error(client, db_session) -> None:
+    # The degenerate case: every named id is unknown. The Session's Sets keep
+    # their current order (all appended as "unnamed"); still a clean 200.
     alice = await _make_user(db_session, "alice@example.com")
     ex = await _make_exercise(db_session, "Squat")
     client.set_user(alice)
@@ -386,12 +443,12 @@ async def test_reorder_rejects_wrong_id_set(client, db_session) -> None:
         )
     ).json()["id"]
 
-    # A list that isn't exactly the current set ids is a 400.
     resp = await client.put(
         f"/api/sessions/{sid}/sets/order",
-        json={"set_ids": [set_id, str(uuid.uuid4())]},
+        json={"set_ids": [str(uuid.uuid4()), str(uuid.uuid4())]},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert [s["id"] for s in resp.json()["sets"]] == [set_id]
 
 
 # --------------------------------------------------------------------------- #
@@ -760,3 +817,61 @@ async def test_add_set_replay_does_not_re_award_a_pr(client, db_session) -> None
     # One row per weight-independent dimension (weight, e1rm, volume) + one
     # reps_at_weight row for 100 kg = 4 rows, not 8.
     assert len(prs) == 4
+
+
+async def test_start_session_with_another_users_id_is_409_not_500(client, db_session) -> None:
+    # The idempotency lookup is scoped to the caller's OWN Sessions, so a client
+    # id that exists under ANOTHER user falls through to the INSERT — which would
+    # trip the global primary key and raise an IntegrityError → HTTP 500. A 500
+    # is transient to the sync engine, so a poisoned op would wedge the queue
+    # forever. The server must instead return a clean, non-wedging 409.
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    sid = str(uuid.uuid4())
+
+    client.set_user(alice)
+    assert (await client.post("/api/sessions/", json={"id": sid})).status_code == 201
+
+    client.set_user(bob)
+    resp = await client.post("/api/sessions/", json={"id": sid})
+    assert resp.status_code == 409
+
+    # The session stays usable afterwards (the failed insert didn't poison it):
+    # Bob can still create a Session with a fresh id.
+    assert (await client.post("/api/sessions/", json={})).status_code == 201
+
+
+async def test_add_set_with_another_sessions_set_id_is_409_not_500(client, db_session) -> None:
+    # The same global-PK hazard for Sets: an id that already exists in ANOTHER
+    # Session (here Bob's) isn't found by the caller-scoped replay lookup, so it
+    # falls through to the INSERT and would 500 on the Set primary key. Must be a
+    # clean 409 the engine can drop instead of retrying forever.
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    set_id = str(uuid.uuid4())
+
+    client.set_user(bob)
+    bob_sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    assert (
+        await client.post(
+            f"/api/sessions/{bob_sid}/sets",
+            json={"id": set_id, "exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+        )
+    ).status_code == 201
+
+    client.set_user(alice)
+    alice_sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    resp = await client.post(
+        f"/api/sessions/{alice_sid}/sets",
+        json={"id": set_id, "exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+    )
+    assert resp.status_code == 409
+
+    # Alice's Session is still usable (insert failure localized, not poisoning).
+    assert (
+        await client.post(
+            f"/api/sessions/{alice_sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 80, "reps": 8},
+        )
+    ).status_code == 201

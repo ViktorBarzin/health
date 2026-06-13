@@ -31,6 +31,7 @@ from app.schemas.sessions import (
     PRReadout,
     SessionCreate,
     SessionDetail,
+    SessionFinish,
     SessionSummary,
     SetCreate,
     SetRead,
@@ -117,14 +118,19 @@ async def start_session(
     """Start (create) a Session for the caller, optionally backdated.
 
     The offline logger (ADR-0005, #6) may supply the Session ``id`` it minted at
-    the gym. If a Session with that id already exists for this user, this is a
-    replay of an already-applied create — return it unchanged (idempotent)
-    instead of erroring on the primary key. A different user's id is treated as
-    not-found and a fresh Session is created under the caller, so a client id can
-    never collide across accounts.
+    the gym. If a Session with that id already exists **for this user**, this is
+    a replay of an already-applied create — return it unchanged (idempotent)
+    instead of erroring on the primary key.
+
+    A client id is matched only within the caller's own Sessions (the security
+    contract). The ``id`` column is a *global* primary key, though, so an id that
+    happens to exist under ANOTHER user would trip ``training_sessions_pkey`` on
+    insert. v4-UUID randomness makes that astronomically unlikely, but we guard
+    it: a cross-user id is a clean 409 (a non-wedging 4xx the sync engine drops),
+    never a 500 (transient → the op would retry forever).
     """
     if payload.id is not None:
-        existing = (
+        owned = (
             await db.execute(
                 select(TrainingSession).where(
                     TrainingSession.id == payload.id,
@@ -132,9 +138,21 @@ async def start_session(
                 )
             )
         ).scalar_one_or_none()
-        if existing is not None:
-            await db.refresh(existing, attribute_names=["sets"])
-            return _detail(existing)
+        if owned is not None:
+            await db.refresh(owned, attribute_names=["sets"])
+            return _detail(owned)
+        # Not ours — make sure it isn't someone else's before we INSERT, so a
+        # global-PK clash is a clean 409 instead of an IntegrityError/500.
+        clashes = (
+            await db.execute(
+                select(TrainingSession.id).where(TrainingSession.id == payload.id)
+            )
+        ).scalar_one_or_none()
+        if clashes is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A Session with this id already exists.",
+            )
 
     session = TrainingSession(user_id=user.id)
     if payload.id is not None:
@@ -213,13 +231,25 @@ async def get_session(
 @router.post("/{session_id}/finish", response_model=SessionDetail)
 async def finish_session(
     session_id: uuid.UUID,
+    payload: SessionFinish | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetail:
-    """Mark a Session finished (sets ``ended_at`` to now); idempotent if already."""
+    """Mark a Session finished; idempotent if already finished.
+
+    ``ended_at`` defaults to the server clock, but the offline logger (ADR-0005)
+    may supply the moment the user tapped *finish* — which is more correct when
+    the finish syncs later, and avoids the displayed end time flickering from the
+    optimistic value to ``now()`` on reconcile. Honoured only on the first
+    finish (idempotent: a replay leaves the already-set ``ended_at`` untouched).
+    """
     session = await _get_owned_session(db, session_id, user)
     if session.ended_at is None:
-        session.ended_at = func.now()
+        session.ended_at = (
+            payload.ended_at
+            if payload is not None and payload.ended_at is not None
+            else func.now()
+        )
     await db.flush()
     await db.refresh(session, attribute_names=["sets", "ended_at"])
     return _detail(session)
@@ -273,6 +303,13 @@ async def add_set(
     the existing Set (with its authoritative PRs) unchanged, rather than
     inserting a duplicate or tripping the ``(session_id, order_index)`` unique
     constraint.
+
+    ``id`` is a *global* primary key, so a supplied id that already exists in a
+    DIFFERENT Session (not found by the in-Session replay check) would trip
+    ``training_sets_pkey`` on insert. v4-UUID randomness makes that astronomically
+    unlikely, but we guard it as a clean 409 (a non-wedging 4xx the sync engine
+    drops) rather than letting it surface as a 500 (which the engine retries
+    forever).
     """
     session = await _get_owned_session(db, session_id, user)
 
@@ -282,6 +319,18 @@ async def add_set(
             prs = await detect_and_persist_prs(db, existing)
             await db.refresh(existing, attribute_names=["exercise"])
             return _write_result(existing, prs)
+        # Not in this Session — ensure the id isn't taken by another Session
+        # before we INSERT, so a global-PK clash is a clean 409, not a 500.
+        clashes = (
+            await db.execute(
+                select(TrainingSet.id).where(TrainingSet.id == payload.id)
+            )
+        ).scalar_one_or_none()
+        if clashes is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A Set with this id already exists.",
+            )
 
     await _assert_exercise_visible(db, payload.exercise_id, user)
 
@@ -418,28 +467,43 @@ async def reorder_sets(
 ) -> SessionDetail:
     """Reorder a Session's Sets to match the given list of Set ids.
 
-    The body must list exactly the Session's current Set ids (a permutation);
-    anything else is a 400. Reindexing is two-phase — first bump every row out of
-    the way (into a high range), then assign the final 0..n-1 indices — so the
-    unique ``(session_id, order_index)`` constraint never trips mid-update.
+    **Tolerant** (ADR-0005, #6): the offline logger may replay a reorder whose
+    ``set_ids`` no longer exactly matches the Session — an id the server has
+    since lost (a Set deleted while the reorder sat in the queue), or one it
+    never had. Demanding an exact permutation (the old 400) meant the sync engine
+    treated the rejection as permanent and **silently dropped the reorder**,
+    losing the user's intent. So instead we reindex what we're given: take the
+    valid named ids in the requested order (ignoring unknown ids and duplicates),
+    then append any current Sets the list didn't name, preserving their order.
+    The result is always a gap-free 0..n-1 permutation of the Session's *actual*
+    Sets.
+
+    Reindexing is two-phase — first bump every row into a high non-colliding
+    range, then assign the final 0..n-1 indices — so the unique
+    ``(session_id, order_index)`` constraint never trips mid-update.
     """
     session = await _get_owned_session(db, session_id, user)
-    current_ids = {s.id for s in session.sets}
-    requested_ids = list(payload.set_ids)
-
-    if set(requested_ids) != current_ids or len(requested_ids) != len(current_ids):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="set_ids must list exactly the Session's current Sets",
-        )
-
     by_id = {s.id: s for s in session.sets}
+
+    # Valid named ids, in the requested order, de-duplicated (first wins).
+    seen: set[uuid.UUID] = set()
+    ordered_ids: list[uuid.UUID] = []
+    for sid in payload.set_ids:
+        if sid in by_id and sid not in seen:
+            seen.add(sid)
+            ordered_ids.append(sid)
+    # Append any current Sets the request didn't name, in their existing order,
+    # so no Set is ever orphaned without an index (or silently dropped).
+    for s in sorted(session.sets, key=lambda s: s.order_index):
+        if s.id not in seen:
+            ordered_ids.append(s.id)
+
     # Phase 1: move all rows to a non-colliding high range.
-    for offset, sid in enumerate(requested_ids):
-        by_id[sid].order_index = len(requested_ids) + offset
+    for offset, sid in enumerate(ordered_ids):
+        by_id[sid].order_index = len(ordered_ids) + offset
     await db.flush()
     # Phase 2: assign the final compact order.
-    for new_index, sid in enumerate(requested_ids):
+    for new_index, sid in enumerate(ordered_ids):
         by_id[sid].order_index = new_index
     await db.flush()
 

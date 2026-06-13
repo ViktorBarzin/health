@@ -367,6 +367,24 @@ export function collapseQueue(queue: SyncOp[]): SyncOp[] {
         result.push(op); // real delete of a server-known set
         break;
       }
+      case 'reorderSets': {
+        // A reorder must never carry an id the server will never see (a set
+        // created-then-deleted while still local), or the reorder endpoint —
+        // which demands an exact permutation of the Session's current Sets —
+        // 400s and the engine drops the op, silently losing the reorder. Prune
+        // those phantom ids; if none survive the reorder is moot, so drop it.
+        // Pruning is replay-invariant: `applyOp` already ignores unknown ids.
+        const kept = op.payload.set_ids.filter(
+          (sid) => !droppedSets.has(setKey(op.sessionId, sid)),
+        );
+        if (kept.length === 0) continue;
+        result.push(
+          kept.length === op.payload.set_ids.length
+            ? op
+            : { ...op, payload: { ...op.payload, set_ids: kept } },
+        );
+        break;
+      }
       default:
         result.push(op);
         break;
@@ -374,6 +392,37 @@ export function collapseQueue(queue: SyncOp[]): SyncOp[] {
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Send-time reorder re-derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-derive a `reorderSets` op's `set_ids` for the moment it is SENT, given the
+ * ops that precede it in the FIFO queue (which, at send time, have already been
+ * delivered to the server). Strips any id removed by an earlier `deleteSet`
+ * (for this session) so the payload is a valid permutation of what the server
+ * still holds — the reorder endpoint demands an exact permutation, and a stale
+ * id otherwise 400s and the op gets dropped, silently losing the reorder.
+ *
+ * Order matters: only deletes BEFORE the reorder in the queue are stripped (a
+ * delete that comes *after* hasn't run when the reorder is sent, so its set is
+ * still live). Collapse already removed locally-created-then-deleted ids; this
+ * covers the server-known-then-deleted case collapse can't see. Pure — returns
+ * the original op unchanged when nothing needs stripping.
+ */
+export function reorderForSend(reorder: SyncOp, precedingOps: SyncOp[]): SyncOp {
+  if (reorder.kind !== 'reorderSets') return reorder;
+  const deletedBefore = new Set<string>();
+  for (const op of precedingOps) {
+    if (op.sessionId !== reorder.sessionId) continue;
+    if (op.kind === 'deleteSet') deletedBefore.add(op.setId);
+  }
+  if (deletedBefore.size === 0) return reorder;
+  const kept = reorder.payload.set_ids.filter((sid) => !deletedBefore.has(sid));
+  if (kept.length === reorder.payload.set_ids.length) return reorder;
+  return { ...reorder, payload: { ...reorder.payload, set_ids: kept } };
 }
 
 // ---------------------------------------------------------------------------
