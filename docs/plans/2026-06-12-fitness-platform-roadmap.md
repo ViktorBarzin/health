@@ -32,7 +32,8 @@ Foundations folded in only where M1 needs them:
    sessions, reconcile the 3 user rows to Authentik emails (yahoo→gmail for Anca; merge or
    retire me@viktorbarzin.me after checking what it owns).
 2. **Renovation riders**: DATABASE_URL → `pg-cluster-rw.dbaas` (legacy `postgresql` Service
-   pins a pod IP), PWA shell (manifest, installable, phone-first gym screens), CLAUDE.md
+   pins a pod IP), **mobile-first PWA shell** (manifest, installable, phone-first gym
+   screens — the primary surface; desktop is the adaptation — ADR-0007), CLAUDE.md
    corrections.
 3. **Catch-up Import**: one fresh export.zip per user through the existing upload path
    closes the Feb→now gap (dedup makes it safe).
@@ -105,6 +106,9 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
   the watch, not of us.
 - Watch companion / HealthKit write-back — structurally impossible for a PWA; mitigated by
   sub-3-tap offline logging + screen wake-lock.
+- Native mobile apps in M1–M3 — mobile-first PWA only (ADR-0007). A Capacitor Android shell
+  (TripIt-style) is a later follow-on; iOS native is deferred until the paid Apple Developer
+  Program is worth it.
 - Hosted exercise demo videos — deep-links only (content licensing isn't our business).
 - Read-API tokens, per-workout GPX/TCX/FIT export, outbound webhooks — deferred; full
   JSON+CSV Export ships in M2, the rest layer onto the same event model later (ADR-0006).
