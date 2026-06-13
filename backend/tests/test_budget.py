@@ -36,6 +36,7 @@ import pytest
 
 from app.services.budget import (
     KCAL_PER_KG,
+    MAX_PLAUSIBLE_RATE_KG_PER_WEEK,
     BudgetInputs,
     ProteinRule,
     TrendInput,
@@ -297,3 +298,79 @@ def test_estimated_budget_still_applies_the_goal_delta() -> None:
         _inputs(goal=CUT, intake_kcal=None, true_weight_kg=80.0, rate_kg_per_week=None)
     )
     assert result.target_kcal < result.tdee_kcal
+
+
+# --------------------------------------------------------------------------- #
+# Corrupt-data robustness — an implausible weight rate never yields a negative
+# or absurdly-low target / negative macros; it falls back to the labelled estimate
+# --------------------------------------------------------------------------- #
+
+
+def test_implausible_weight_rate_falls_back_to_estimated_not_a_wrong_number() -> None:
+    """A physiologically-impossible +5 kg/week (corrupt scale) → labelled estimate.
+
+    A naïve energy-balance back-out would give TDEE = 2500 − 5*7700/7 ≈ −3000, and
+    a *negative* calorie target would flow straight through as a "target". Instead,
+    a rate beyond the plausibility threshold means the trend is untrustworthy, so we
+    fall back to the bodyweight estimate (``method='estimated'``) — never a measured
+    number from corrupt data. This is the same honesty contract as insufficient_data.
+    """
+    result = compute_budget(
+        _inputs(goal=BULK, intake_kcal=2500.0, true_weight_kg=80.0, rate_kg_per_week=5.0)
+    )
+    assert result.insufficient_data is False
+    assert result.method == "estimated"  # NOT "adaptive" from the corrupt rate
+    # Sane, positive numbers — a bodyweight estimate, not a negative back-out.
+    assert result.tdee_kcal is not None and result.tdee_kcal > 1000.0
+    assert result.target_kcal is not None and result.target_kcal > 1000.0
+    assert result.protein_g > 0 and result.carbs_g >= 0 and result.fat_g > 0
+
+
+def test_implausible_weight_loss_rate_also_falls_back() -> None:
+    """A −4 kg/week (wrong-person / unit-corrupt weigh-ins) is rejected the same way."""
+    result = compute_budget(
+        _inputs(goal=CUT, intake_kcal=2200.0, true_weight_kg=75.0, rate_kg_per_week=-4.0)
+    )
+    assert result.method == "estimated"
+    assert result.tdee_kcal is not None and result.tdee_kcal > 1000.0
+    assert result.target_kcal is not None and result.target_kcal > 1000.0
+
+
+def test_rate_just_inside_the_threshold_is_still_adaptive() -> None:
+    """A fast-but-plausible rate (just under the threshold) is still trusted/measured.
+
+    The guard rejects only the *implausible*; a hard cut/bulk near but below the
+    threshold must still be reconciled adaptively (we don't throw away real signal).
+    """
+    just_under = MAX_PLAUSIBLE_RATE_KG_PER_WEEK - 0.1
+    result = compute_budget(
+        _inputs(goal=CUT, intake_kcal=2000.0, true_weight_kg=80.0, rate_kg_per_week=-just_under)
+    )
+    assert result.method == "adaptive"
+    expected_tdee = 2000.0 + just_under * KCAL_PER_KG / 7.0
+    assert result.tdee_kcal == pytest.approx(expected_tdee, abs=5.0)
+
+
+def test_output_floor_binds_when_adaptive_tdee_would_go_sub_survival() -> None:
+    """A backstop independent of the rate guard: the output floor actually engages.
+
+    Constructed so the *pre-floor* adaptive TDEE is negative — a light person whose
+    diary under-reports badly while a fast-but-still-plausible gain is logged:
+    TDEE = 800 − 1.4·7700/7 ≈ −740. The plausibility guard does NOT fire (1.4 < 1.5),
+    so this is the adaptive path; the defensive floor must catch the absurd number
+    and clamp TDEE/target to a sane minimum, with no negative macro escaping.
+    """
+    just_under = MAX_PLAUSIBLE_RATE_KG_PER_WEEK - 0.1
+    naive_tdee = 800.0 - just_under * KCAL_PER_KG / 7.0
+    assert naive_tdee < 0.0  # the case really would go negative without the floor
+    result = compute_budget(
+        _inputs(
+            goal=CUT, intake_kcal=800.0, true_weight_kg=50.0,
+            rate_kg_per_week=just_under,
+        )
+    )
+    assert result.method == "adaptive"  # guard didn't fire; floor did the work
+    assert result.tdee_kcal is not None and result.tdee_kcal >= 1000.0
+    assert result.target_kcal is not None and result.target_kcal >= 1000.0
+    assert result.fat_g >= 0.0
+    assert result.protein_g >= 0.0 and result.carbs_g >= 0.0

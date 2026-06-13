@@ -49,10 +49,10 @@ of the calorie target (a floor for hormonal health), and carbohydrate takes the
 remaining calories. Each macro converts at Atwater factors
 (:data:`_KCAL_PER_G`), so the three reconstruct the calorie target.
 
-Insufficient data — a labelled fallback, never a confident wrong number
-=======================================================================
-Measuring TDEE needs **both** an intake history *and* a weight *trend* (a rate).
-When either is missing:
+Insufficient / untrustworthy data — a labelled fallback, never a wrong number
+=============================================================================
+Measuring TDEE needs **both** an intake history *and* a *trustworthy* weight
+*trend* (a rate). When that's not available:
 
 * **bodyweight known** → a bodyweight-based formula estimate
   (:data:`_KCAL_PER_KG_MAINTENANCE` kcal/kg/day), flagged ``method="estimated"``
@@ -60,6 +60,20 @@ When either is missing:
   delta still applies, so the estimate is goal-aware.
 * **no bodyweight at all** → ``insufficient_data`` with null numbers. We cannot
   even estimate, so we say so rather than fabricate.
+
+**Corrupt scale data is treated as untrustworthy, not as truth.** A *sustained*
+(28-day-smoothed) weight rate beyond :data:`MAX_PLAUSIBLE_RATE_KG_PER_WEEK` is not
+human physiology — it signals a unit-corrupt scale or wrong-person weigh-ins. A
+naïve back-out of such a rate would give a negative/absurd TDEE that flowed
+straight through as a "target"; instead we distrust the trend and fall back to the
+labelled ``estimated`` path — the same honesty contract as the missing-data cases.
+As a **backstop independent of that guard**, the computed TDEE and target are
+defensively floored at a BMR-ish minimum for the bodyweight (:func:`_min_kcal`) and
+the macros kept non-negative, so *no* path — even an aggressive-but-plausible cut
+on a very light person, where the floor genuinely binds — can emit a sub-survival
+or negative number. (Note the separate, deliberate carb-floor edge in
+:func:`_macros`: when protein+fat alone exceed a tiny target the macros may sum to
+slightly more than ``target_kcal`` — the protein/fat floors win.)
 
 All constants live at the top — the single place to retune the Budget.
 """
@@ -123,6 +137,25 @@ _KCAL_PER_G_FAT: float = 9.0
 #: estimate, surfaced as ``method="estimated"`` so it is never mistaken for a
 #: measured TDEE.
 _KCAL_PER_KG_MAINTENANCE: float = 31.0
+
+#: Plausibility ceiling on the observed weight-trend rate (kg/week, absolute). A
+#: *sustained* (28-day-smoothed) rate beyond this is not human physiology — even
+#: an aggressive cut or bulk rarely holds >~1 %BW/week, and the EMA+OLS already
+#: damp transient spikes — so a smoothed rate over ~1.5 kg/week signals **corrupt
+#: scale data** (unit-corrupt readings, wrong-person weigh-ins). We then distrust
+#: the trend and fall back to the labelled bodyweight estimate rather than
+#: back-out a (possibly negative) TDEE from it — the same honesty contract as
+#: ``insufficient_data``: never a confidently-wrong number from bad input.
+MAX_PLAUSIBLE_RATE_KG_PER_WEEK: float = 1.5
+
+#: Defensive floors on the computed calorie numbers — a backstop independent of
+#: the rate guard, so no path (even an aggressive-but-plausible cut on a very
+#: light person) ever emits a sub-survival or negative target. The TDEE/target are
+#: floored at ``max(_MIN_KCAL_FLOOR, _MIN_KCAL_PER_KG · weight)``: ~22 kcal/kg is a
+#: BMR-ish lower bound (resting metabolic rate is ~20-24 kcal/kg for most adults),
+#: and ``_MIN_KCAL_FLOOR`` is an absolute floor below which no target is ever sane.
+_MIN_KCAL_PER_KG: float = 22.0
+_MIN_KCAL_FLOOR: float = 1000.0
 
 #: Days per week — the rates are per week.
 _DAYS_PER_WEEK: float = 7.0
@@ -246,22 +279,32 @@ def _protein_g(goal: str, true_weight_kg: float, rule: ProteinRule | None) -> fl
     return g_per_kg * true_weight_kg
 
 
+def _min_kcal(true_weight_kg: float) -> float:
+    """The defensive lower floor for TDEE/target: a BMR-ish minimum for this weight.
+
+    ``max(_MIN_KCAL_FLOOR, _MIN_KCAL_PER_KG · weight)`` — never below a sane survival
+    floor, and never below resting metabolic rate for the bodyweight.
+    """
+    return max(_MIN_KCAL_FLOOR, _MIN_KCAL_PER_KG * true_weight_kg)
+
+
 def _macros(
     goal: str, target_kcal: float, true_weight_kg: float, rule: ProteinRule | None
 ) -> tuple[float, float, float]:
     """Split a calorie target into (protein_g, carbs_g, fat_g).
 
     Protein first (from the Principle), fat as a fraction of calories (a hormonal
-    floor), carbohydrate the remainder. Carbs are floored at zero so an extreme
-    deficit with high protein never yields a negative number (it just means
-    protein+fat already meet the target). Note: when that floor binds, protein and
-    fat are hard minimums that can't both be honoured under a tiny target, so the
-    three macros may sum to slightly *more* than ``target_kcal`` — a deliberate
-    trade-off (the protein/fat floors win); a UI summing the macros should expect
-    that edge rather than assume they always reconstruct the calorie target.
+    floor), carbohydrate the remainder. Carbs **and fat** are floored at zero so a
+    degenerate target never yields a negative macro (an extreme deficit with high
+    protein just means protein+fat already meet the target). Note: when the carb
+    floor binds, protein and fat are hard minimums that can't both be honoured under
+    a tiny target, so the three macros may sum to slightly *more* than
+    ``target_kcal`` — a deliberate trade-off (the protein/fat floors win); a UI
+    summing the macros should expect that edge rather than assume they always
+    reconstruct the calorie target.
     """
-    protein_g = _protein_g(goal, true_weight_kg, rule)
-    fat_g = target_kcal * _FAT_KCAL_FRACTION / _KCAL_PER_G_FAT
+    protein_g = max(0.0, _protein_g(goal, true_weight_kg, rule))
+    fat_g = max(0.0, target_kcal * _FAT_KCAL_FRACTION / _KCAL_PER_G_FAT)
     protein_kcal = protein_g * _KCAL_PER_G_PROTEIN
     fat_kcal = fat_g * _KCAL_PER_G_FAT
     carbs_kcal = max(0.0, target_kcal - protein_kcal - fat_kcal)
@@ -273,10 +316,14 @@ def compute_budget(inputs: BudgetInputs) -> Budget:
     """Compute the daily Budget from intake, the weight trend, the Goal & protein rule.
 
     Measures TDEE adaptively from energy balance when both an intake history and a
-    weight *rate* are available (``method="adaptive"``); otherwise falls back to a
-    labelled bodyweight estimate (``method="estimated"``) when at least a
-    bodyweight is known, or an ``insufficient_data`` result when not even that.
-    Always applies the Goal's surplus/deficit and derives macros.
+    *trustworthy* weight rate are available (``method="adaptive"``); otherwise falls
+    back to a labelled bodyweight estimate (``method="estimated"``) when at least a
+    bodyweight is known, or an ``insufficient_data`` result when not even that. A
+    weight rate beyond :data:`MAX_PLAUSIBLE_RATE_KG_PER_WEEK` is treated as corrupt
+    (and so *not* trustworthy) — we estimate rather than back a wrong number out of
+    it. The output calories are also defensively floored (:func:`_min_kcal`) and
+    macros kept non-negative as a backstop, so no path ever emits a sub-survival or
+    negative target. Always applies the Goal's surplus/deficit and derives macros.
     """
     trend = inputs.trend
     true_weight = trend.true_weight_kg if trend is not None else None
@@ -286,7 +333,11 @@ def compute_budget(inputs: BudgetInputs) -> Budget:
         return _INSUFFICIENT
 
     rate = trend.rate_kg_per_week if trend is not None else None
-    have_adaptive = inputs.avg_intake_kcal is not None and rate is not None
+    # A physiologically-implausible (28-day-smoothed) rate signals corrupt scale
+    # data — distrust it for the energy-balance back-out (which would otherwise
+    # yield a negative/absurd TDEE) and fall back to the labelled estimate.
+    rate_trustworthy = rate is not None and abs(rate) <= MAX_PLAUSIBLE_RATE_KG_PER_WEEK
+    have_adaptive = inputs.avg_intake_kcal is not None and rate_trustworthy
 
     if have_adaptive:
         # Measure maintenance from energy balance: intake minus the energy the
@@ -300,7 +351,13 @@ def compute_budget(inputs: BudgetInputs) -> Budget:
 
     target_rate = _goal_target_rate_kg_per_week(inputs.goal, true_weight)
     goal_delta = _rate_to_kcal_per_day(target_rate)
-    target_kcal = tdee + goal_delta
+
+    # Defensive floor (a backstop independent of the rate guard): neither
+    # maintenance nor the goal-adjusted target may fall below a BMR-ish survival
+    # minimum for this bodyweight.
+    floor = _min_kcal(true_weight)
+    tdee = max(floor, tdee)
+    target_kcal = max(floor, tdee + goal_delta)
 
     protein_g, carbs_g, fat_g = _macros(
         inputs.goal, target_kcal, true_weight, inputs.protein_rule
