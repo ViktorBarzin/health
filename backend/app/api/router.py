@@ -8,6 +8,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.exercises import router as exercises_router
 from app.api.ingestion import router as ingestion_router
 from app.api.metrics import router as metrics_router
+from app.api.sessions import router as sessions_router
 from app.api.workouts import router as workouts_router
 
 router = APIRouter()
@@ -19,3 +20,4 @@ router.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboar
 router.include_router(activity_router, prefix="/api/activity", tags=["activity"])
 router.include_router(ingestion_router, prefix="/api/import", tags=["import"])
 router.include_router(exercises_router, prefix="/api/exercises", tags=["exercises"])
+router.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])

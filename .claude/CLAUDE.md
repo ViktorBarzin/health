@@ -43,7 +43,8 @@ backend/app/
 │   ├── workouts.py   # /api/workouts — list/detail with route points
 │   ├── activity.py   # /api/activity — activity rings
 │   ├── ingestion.py  # /api/import — upload/status/cancel/delete
-│   └── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
+│   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
+│   └── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -54,7 +55,9 @@ backend/app/
 ├── services/
 │   ├── xml_parser.py  # Producer-consumer XML parsing pipeline
 │   ├── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
-│   └── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
+│   ├── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
+│   ├── effort.py      # Pure Effort RIR↔RPE mapping (one-tap chip ↔ stored RPE-equivalent)
+│   └── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -75,6 +78,8 @@ backend/app/
 | `import_batches` | id (UUID) | — |
 | `exercises` | id (UUID) | partial-UNIQUE(slug) WHERE user_id IS NULL, partial-UNIQUE(user_id, slug) WHERE user_id IS NOT NULL, (user_id) |
 | `exercise_muscles` | id | UNIQUE(exercise_id, muscle, role), (muscle) |
+| `training_sessions` | id (UUID) | (user_id, started_at) |
+| `training_sets` | id (UUID) | UNIQUE(session_id, order_index), (session_id, order_index), (exercise_id) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -85,6 +90,22 @@ normalized in `exercise_muscles` with `muscle` a native Postgres enum (17 datase
 free text. Demo-video link = computed YouTube "proper form" search URL (no hosted video).
 Images = jsDelivr CDN URLs (no binaries vendored). API: `/api/exercises` (browse with
 search/muscle/equipment filters, detail, create-custom, `/muscles` + `/equipment` options).
+
+**Session/Set logging** (the live gym-logging core — CONTEXT.md "Session"/"Set"; online only,
+offline sync is #6). A **Session** is what the user logs live (NOT a `Workout`, which is reserved
+for imported sensor records). Tables are named `training_sessions`/`training_sets` because
+`session`/`set` collide with reserved/auth identifiers; the API/URL vocabulary stays the clean
+"session"/"set". A `training_set` references exactly one `exercise` (visibility-checked: global ∪
+own), records `weight_kg × reps`, a native-enum `set_type` (normal/warmup/drop/failure, default
+normal), and optional **Effort** stored as the RPE-equivalent in the `rpe` column. Effort travels
+the API as **RIR** (one-tap chip 0–4, 4 = "4+") and is mapped to/from RPE by the pure
+`services/effort.py` (`rir_to_rpe`: 0→10, 1→9, 2→8, 3→7, 4+→6). Non-normal set types are excluded
+from volume/PR stats — `services/volume.py` is the single source of that rule (PR/analytics slices
+inherit it). Set order is an explicit 0-based `order_index` kept gap-free server-side (append on
+add, compact on delete, two-phase rewrite on reorder). All endpoints are per-user scoped via
+`get_current_user`; a Set is reached only through its owning Session. API: `/api/sessions`
+(start/list/get/finish/delete a Session; `/{id}/sets` add, `/{id}/sets/{set_id}` PATCH/DELETE,
+`/{id}/sets/order` PUT reorder).
 
 ## Ingestion Pipeline
 
@@ -124,10 +145,13 @@ frontend/src/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus
-│   │   └── layout/     # Header, Sidebar, DateRangePicker
+│   │   ├── sessions/   # ExercisePicker (bottom-sheet), SetTypeChip, EffortChips (RIR)
+│   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/
     ├── +page.svelte           # Dashboard (home)
+    ├── sessions/+page.svelte       # Train: Sessions list + start/resume (primary mobile tab)
+    ├── sessions/[id]/+page.svelte  # Live logging: groups by exercise, steppers, set-type/Effort chips, reorder, finish
     ├── workouts/+page.svelte  # Workout list
     ├── workouts/[id]/+page.svelte  # Workout detail + map
     ├── exercises/+page.svelte       # Exercise library browse (search + muscle/equipment filters)
@@ -140,6 +164,9 @@ frontend/src/
     ├── sleep/+page.svelte     # Sleep view
     └── trends/+page.svelte    # Trends
 ```
+
+The mobile bottom-nav (`lib/nav.ts`) pins **Train** (`/sessions`) as a primary tab — the core
+logging action — alongside Dashboard, Workouts, Exercises (Metrics moved to the "More" sheet).
 
 ## Auth
 
@@ -156,7 +183,8 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `c9d3e5f7a2b4`.
+Alembic migrations in `backend/alembic/versions/`. Current head: `d4f6a8c0e2b5`
+(`add training sessions and sets`).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 

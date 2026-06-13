@@ -1,0 +1,464 @@
+"""Session/Set logging API + per-user scoping contract.
+
+- Start / list / get / finish / delete a Session (per user).
+- Add / edit / delete / reorder Sets within a Session.
+- A Set references a visible Exercise; weight × reps, set type, and Effort (as
+  the one-tap RIR chip, stored as RPE-equivalent) round-trip.
+- A user can never read or mutate another user's Session or its Sets.
+"""
+
+import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.core.dependencies import get_current_user
+from app.database import get_db
+from app.main import app
+from app.models.exercise import Exercise
+from app.models.user import User
+
+
+async def _make_user(db, email: str) -> User:
+    user = User(email=email)
+    db.add(user)
+    await db.flush()
+    return user
+
+
+async def _make_exercise(db, name: str, *, user_id=None) -> Exercise:
+    ex = Exercise(
+        slug=f"{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:6]}",
+        name=name,
+        user_id=user_id,
+        source="free-exercise-db" if user_id is None else "custom",
+    )
+    db.add(ex)
+    await db.flush()
+    return ex
+
+
+@pytest.fixture
+async def client(db_session):
+    """An AsyncClient bound to the test session with a switchable identity."""
+    state = {"user": None}
+
+    async def _override_db():
+        yield db_session
+
+    async def _override_user():
+        return state["user"]
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_user
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        ac.set_user = lambda u: state.__setitem__("user", u)  # type: ignore[attr-defined]
+        yield ac
+    app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Session CRUD
+# --------------------------------------------------------------------------- #
+
+
+async def test_start_session_creates_active_empty_session(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+
+    resp = await client.post("/api/sessions/", json={})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["is_active"] is True
+    assert body["ended_at"] is None
+    assert body["sets"] == []
+    assert body["set_count"] == 0
+    assert body["total_volume_kg"] == 0.0
+    assert body["started_at"]  # server-defaulted
+
+
+async def test_list_sessions_returns_only_own_newest_first(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+
+    client.set_user(alice)
+    s1 = (await client.post("/api/sessions/", json={})).json()["id"]
+    s2 = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    client.set_user(bob)
+    await client.post("/api/sessions/", json={})
+
+    client.set_user(alice)
+    resp = await client.get("/api/sessions/")
+    assert resp.status_code == 200
+    ids = [s["id"] for s in resp.json()]
+    # Only Alice's two, and the most recently started first.
+    assert set(ids) == {s1, s2}
+
+
+async def test_finish_session_sets_end_time_and_is_idempotent(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    resp = await client.post(f"/api/sessions/{sid}/finish")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_active"] is False
+    assert body["ended_at"] is not None
+    first_end = body["ended_at"]
+
+    # Finishing again is a no-op (keeps the original end time).
+    again = await client.post(f"/api/sessions/{sid}/finish")
+    assert again.status_code == 200
+    assert again.json()["ended_at"] == first_end
+
+
+async def test_list_filters_active_vs_finished(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+    active = (await client.post("/api/sessions/", json={})).json()["id"]
+    finished = (await client.post("/api/sessions/", json={})).json()["id"]
+    await client.post(f"/api/sessions/{finished}/finish")
+
+    only_active = await client.get("/api/sessions/", params={"active": "true"})
+    assert [s["id"] for s in only_active.json()] == [active]
+
+    only_finished = await client.get("/api/sessions/", params={"active": "false"})
+    assert [s["id"] for s in only_finished.json()] == [finished]
+
+
+async def test_delete_session_removes_it_and_its_sets(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+    )
+
+    resp = await client.delete(f"/api/sessions/{sid}")
+    assert resp.status_code == 204
+    assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Set logging: weight × reps, set type, Effort
+# --------------------------------------------------------------------------- #
+
+
+async def test_add_set_records_weight_reps_and_defaults_to_normal(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Back Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 142.5, "reps": 5},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["weight_kg"] == 142.5
+    assert body["reps"] == 5
+    assert body["set_type"] == "normal"
+    assert body["effort_rir"] is None  # Effort optional, not tapped
+    assert body["order_index"] == 0
+    assert body["exercise_id"] == str(ex.id)
+    assert body["exercise_name"] == "Back Squat"
+
+
+@pytest.mark.parametrize(
+    "rir,expected_rpe_via_detail",
+    [(0, 10.0), (1, 9.0), (2, 8.0), (3, 7.0), (4, 6.0)],
+)
+async def test_effort_rir_round_trips_through_the_api(
+    client, db_session, rir, expected_rpe_via_detail
+) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Deadlift")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={
+            "exercise_id": str(ex.id),
+            "weight_kg": 180,
+            "reps": 3,
+            "effort_rir": rir,
+        },
+    )
+    assert resp.status_code == 201
+    # The API surfaces the chip value back unchanged…
+    assert resp.json()["effort_rir"] == rir
+
+
+async def test_set_type_chip_is_stored(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Overhead Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 40, "reps": 12, "set_type": "warmup"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["set_type"] == "warmup"
+
+
+async def test_total_volume_excludes_non_normal_sets(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    # warmup (excluded) + two normal (counted) + failure (excluded)
+    for w, r, t in [(60, 10, "warmup"), (100, 5, "normal"), (100, 4, "normal"), (110, 1, "failure")]:
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": w, "reps": r, "set_type": t},
+        )
+
+    detail = (await client.get(f"/api/sessions/{sid}")).json()
+    assert detail["set_count"] == 4
+    # Only the two normal sets: 100*5 + 100*4 = 900.
+    assert detail["total_volume_kg"] == 900.0
+
+
+async def test_add_set_assigns_sequential_order(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Row")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    indices = []
+    for r in (8, 8, 8):
+        body = (
+            await client.post(
+                f"/api/sessions/{sid}/sets",
+                json={"exercise_id": str(ex.id), "weight_kg": 70, "reps": r},
+            )
+        ).json()
+        indices.append(body["order_index"])
+    assert indices == [0, 1, 2]
+
+
+async def test_add_set_rejects_invisible_exercise(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    bobs_ex = await _make_exercise(db_session, "Bob Secret Move", user_id=bob.id)
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    # Alice can't log Bob's private custom Exercise.
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(bobs_ex.id), "weight_kg": 50, "reps": 5},
+    )
+    assert resp.status_code == 404
+
+
+async def test_effort_rir_out_of_range_is_rejected(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Curl")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 20, "reps": 10, "effort_rir": 5},
+    )
+    assert resp.status_code == 422  # only 0..4 are valid chips
+
+
+# --------------------------------------------------------------------------- #
+# Set edit / delete / reorder
+# --------------------------------------------------------------------------- #
+
+
+async def test_update_set_changes_only_sent_fields(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5, "effort_rir": 2},
+        )
+    ).json()["id"]
+
+    # Bump reps only; weight, effort, type untouched.
+    resp = await client.patch(
+        f"/api/sessions/{sid}/sets/{set_id}", json={"reps": 6}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reps"] == 6
+    assert body["weight_kg"] == 100
+    assert body["effort_rir"] == 2
+    assert body["set_type"] == "normal"
+
+
+async def test_update_set_can_clear_effort_with_explicit_null(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5, "effort_rir": 1},
+        )
+    ).json()["id"]
+
+    resp = await client.patch(
+        f"/api/sessions/{sid}/sets/{set_id}", json={"effort_rir": None}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["effort_rir"] is None
+
+
+async def test_delete_set_compacts_order(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Row")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    ids = []
+    for r in (5, 6, 7):
+        ids.append(
+            (
+                await client.post(
+                    f"/api/sessions/{sid}/sets",
+                    json={"exercise_id": str(ex.id), "weight_kg": 70, "reps": r},
+                )
+            ).json()["id"]
+        )
+
+    # Delete the middle set; the third should slide from index 2 to 1.
+    resp = await client.delete(f"/api/sessions/{sid}/sets/{ids[1]}")
+    assert resp.status_code == 204
+
+    detail = (await client.get(f"/api/sessions/{sid}")).json()
+    remaining = [(s["id"], s["order_index"]) for s in detail["sets"]]
+    assert remaining == [(ids[0], 0), (ids[2], 1)]
+
+
+async def test_reorder_sets_rewrites_indices(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    ids = []
+    for r in (5, 6, 7):
+        ids.append(
+            (
+                await client.post(
+                    f"/api/sessions/{sid}/sets",
+                    json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": r},
+                )
+            ).json()["id"]
+        )
+
+    # Reverse the order.
+    reversed_ids = list(reversed(ids))
+    resp = await client.put(
+        f"/api/sessions/{sid}/sets/order", json={"set_ids": reversed_ids}
+    )
+    assert resp.status_code == 200
+    ordered = [s["id"] for s in resp.json()["sets"]]
+    assert ordered == reversed_ids
+    assert [s["order_index"] for s in resp.json()["sets"]] == [0, 1, 2]
+
+
+async def test_reorder_rejects_wrong_id_set(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+        )
+    ).json()["id"]
+
+    # A list that isn't exactly the current set ids is a 400.
+    resp = await client.put(
+        f"/api/sessions/{sid}/sets/order",
+        json={"set_ids": [set_id, str(uuid.uuid4())]},
+    )
+    assert resp.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Per-user scoping (the security contract)
+# --------------------------------------------------------------------------- #
+
+
+async def test_cannot_read_another_users_session(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    client.set_user(bob)
+    assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
+
+
+async def test_cannot_delete_another_users_session(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    client.set_user(bob)
+    assert (await client.delete(f"/api/sessions/{sid}")).status_code == 404
+    # Still there for Alice.
+    client.set_user(alice)
+    assert (await client.get(f"/api/sessions/{sid}")).status_code == 200
+
+
+async def test_cannot_add_set_to_another_users_session(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    client.set_user(bob)
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+    )
+    assert resp.status_code == 404
+
+
+async def test_cannot_edit_or_delete_another_users_set(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+        )
+    ).json()["id"]
+
+    client.set_user(bob)
+    assert (
+        await client.patch(f"/api/sessions/{sid}/sets/{set_id}", json={"reps": 99})
+    ).status_code == 404
+    assert (
+        await client.delete(f"/api/sessions/{sid}/sets/{set_id}")
+    ).status_code == 404
+
+    # Alice's set is unchanged.
+    client.set_user(alice)
+    detail = (await client.get(f"/api/sessions/{sid}")).json()
+    assert detail["sets"][0]["reps"] == 5

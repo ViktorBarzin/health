@@ -119,3 +119,52 @@ export interface ActivityRingData {
   stand_hours: number | null;
   stand_goal_hours: number | null;
 }
+
+// --- Session/Set logging (the live gym-logging core) ---
+
+/** The four set types. Non-normal types are excluded from volume/PR stats. */
+export type SetType = 'normal' | 'warmup' | 'drop' | 'failure';
+
+/** One performed Set. Effort is the one-tap RIR chip (0–4, 4 = "4+"). */
+export interface TrainingSet {
+  id: string;
+  exercise_id: string;
+  order_index: number;
+  weight_kg: number;
+  reps: number;
+  set_type: SetType;
+  effort_rir: number | null;
+  exercise_name: string | null;
+}
+
+/** A Session in list form: timing plus derived counts and counted volume. */
+export interface SessionSummary {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  is_active: boolean;
+  set_count: number;
+  total_volume_kg: number;
+}
+
+/** A Session with its Sets in order. */
+export interface SessionDetail extends SessionSummary {
+  sets: TrainingSet[];
+}
+
+/** Payload to log a Set. */
+export interface SetCreate {
+  exercise_id: string;
+  weight_kg: number;
+  reps: number;
+  effort_rir?: number | null;
+  set_type?: SetType;
+}
+
+/** Payload to edit a Set (only sent fields change). */
+export interface SetUpdate {
+  weight_kg?: number;
+  reps?: number;
+  effort_rir?: number | null;
+  set_type?: SetType;
+}

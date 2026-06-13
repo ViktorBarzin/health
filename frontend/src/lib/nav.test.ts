@@ -23,6 +23,9 @@ describe('isActive', () => {
   it('matches a section on nested subtree paths', () => {
     expect(isActive('/workouts', '/workouts/abc-123')).toBe(true);
     expect(isActive('/metrics', '/metrics/heart_rate')).toBe(true);
+    // The Train tab stays lit while starting or logging a Session.
+    expect(isActive('/sessions', '/sessions/new')).toBe(true);
+    expect(isActive('/sessions', '/sessions/abc-123')).toBe(true);
   });
 
   it('does not match a sibling that merely shares a prefix', () => {
@@ -56,6 +59,12 @@ describe('mobile nav split', () => {
 
   it('keeps the dashboard as the first primary tab', () => {
     expect(MOBILE_PRIMARY[0]?.href).toBe('/');
+  });
+
+  it('pins Train as a primary mobile tab (the core logging action)', () => {
+    const train = MOBILE_PRIMARY.find((i) => i.href === '/sessions');
+    expect(train).toBeDefined();
+    expect(train?.label).toBe('Train');
   });
 
   it('every nav item is reachable from one of the two groups', () => {
