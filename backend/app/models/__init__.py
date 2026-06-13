@@ -6,6 +6,7 @@ from app.models.category_record import CategoryRecord
 from app.models.workout import Workout
 from app.models.workout_route_point import WorkoutRoutePoint
 from app.models.activity_summary import ActivitySummary
+from app.models.exercise import Exercise, ExerciseMuscle, Muscle, MuscleRole
 
 __all__ = [
     "User",
@@ -16,4 +17,8 @@ __all__ = [
     "Workout",
     "WorkoutRoutePoint",
     "ActivitySummary",
+    "Exercise",
+    "ExerciseMuscle",
+    "Muscle",
+    "MuscleRole",
 ]

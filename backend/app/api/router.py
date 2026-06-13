@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.activity import router as activity_router
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
+from app.api.exercises import router as exercises_router
 from app.api.ingestion import router as ingestion_router
 from app.api.metrics import router as metrics_router
 from app.api.workouts import router as workouts_router
@@ -17,3 +18,4 @@ router.include_router(workouts_router, prefix="/api/workouts", tags=["workouts"]
 router.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 router.include_router(activity_router, prefix="/api/activity", tags=["activity"])
 router.include_router(ingestion_router, prefix="/api/import", tags=["import"])
+router.include_router(exercises_router, prefix="/api/exercises", tags=["exercises"])
