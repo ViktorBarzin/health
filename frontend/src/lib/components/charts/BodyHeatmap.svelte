@@ -30,8 +30,11 @@
 
   let { values, mode = 'recovery', volumeAccent = '#10b981' }: Props = $props();
 
-  // The busiest muscle sets the volume scale; recomputed when values change.
-  let maxVolume = $derived(Math.max(0, ...values.values()));
+  // The busiest muscle sets the volume scale; only meaningful in volume mode (in
+  // recovery mode the values are 0–100 scores and this is unused).
+  let maxVolume = $derived(
+    mode === 'volume' ? Math.max(0, ...values.values()) : 0,
+  );
 
   let tooltip = $state<{ x: number; y: number; label: string; text: string } | null>(
     null,
@@ -100,8 +103,11 @@
 
   function showTip(e: MouseEvent | FocusEvent, muscle: string) {
     const target = e.currentTarget as SVGElement;
-    const svg = target.closest('svg')!;
-    const card = svg.closest('.body-heatmap-card') as HTMLElement;
+    // Position the tooltip relative to the card wrapper. Bail out gracefully if
+    // the expected ancestor is missing (e.g. the component reused in another
+    // layout) rather than dereferencing null.
+    const card = target.closest('.body-heatmap-card');
+    if (!card) return;
     const cardRect = card.getBoundingClientRect();
     const r = target.getBoundingClientRect();
     tooltip = {

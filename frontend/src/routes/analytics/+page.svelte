@@ -38,10 +38,15 @@
     loadAnalytics();
   });
 
-  // Reload weekly volume when the window changes (recovery is window-independent).
+  // Reload weekly volume when the window *changes* (recovery is window-independent).
+  // `loadAnalytics` already fetched the initial window, so only refetch once the
+  // user picks a different one — comparing against the last-loaded window avoids a
+  // redundant second request on mount (the loading→false flip would otherwise
+  // re-run this effect).
+  let loadedWeeks = $state<number | null>(null);
   $effect(() => {
-    const _w = volumeWeeks;
-    if (!loading) loadVolume();
+    const w = volumeWeeks;
+    if (loadedWeeks !== null && w !== loadedWeeks) loadVolume();
   });
 
   // Fetch the e1RM trend whenever the picked Exercise changes.
@@ -62,6 +67,7 @@
       ]);
       recovery = rec;
       volume = vol;
+      loadedWeeks = volumeWeeks;
       trained = ex;
       if (!selectedExercise && ex.length > 0) selectedExercise = ex[0].id;
     } catch (err) {
@@ -72,8 +78,10 @@
   }
 
   async function loadVolume() {
+    const weeks = volumeWeeks;
     try {
-      volume = await api.get<VolumeResponse>(`/api/analytics/volume?weeks=${volumeWeeks}`);
+      volume = await api.get<VolumeResponse>(`/api/analytics/volume?weeks=${weeks}`);
+      loadedWeeks = weeks;
     } catch {
       // Keep the last good volume on a transient error; recovery view still works.
     }
