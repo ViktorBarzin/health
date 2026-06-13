@@ -11,6 +11,11 @@ alembic upgrade head
 # app from serving, so it does not run under `set -e`.
 python -m app.services.seed_exercises || echo "WARN: exercise library seed failed; continuing"
 
+# Seed the Principles knowledge base (cited exercise-science rules, ADR-0004).
+# Idempotent (upsert by key), so it is safe to run on every boot and authoring
+# edits flow through. Best-effort: a seed failure must not stop the app serving.
+python -m app.services.seed_principles || echo "WARN: principles KB seed failed; continuing"
+
 # Start backend in background
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 

@@ -11,6 +11,14 @@ from app.models.training_session import SetType, TrainingSession, TrainingSet
 from app.models.personal_record import PersonalRecord
 from app.models.gym_profile import GymProfile
 from app.models.exercise_pref import ExercisePref
+from app.models.principle import (
+    EvidenceGrade,
+    ExperienceLevel,
+    Principle,
+    PrincipleCategory,
+    PrincipleCitation,
+    TrainingGoal,
+)
 
 __all__ = [
     "User",
@@ -31,4 +39,10 @@ __all__ = [
     "PersonalRecord",
     "GymProfile",
     "ExercisePref",
+    "Principle",
+    "PrincipleCitation",
+    "TrainingGoal",
+    "ExperienceLevel",
+    "PrincipleCategory",
+    "EvidenceGrade",
 ]

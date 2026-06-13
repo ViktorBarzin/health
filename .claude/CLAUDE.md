@@ -44,7 +44,8 @@ backend/app/
 │   ├── activity.py   # /api/activity — activity rings
 │   ├── ingestion.py  # /api/import — upload/status/cancel/delete
 │   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
-│   └── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
+│   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
+│   └── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -84,6 +85,8 @@ backend/app/
 | `training_sessions` | id (UUID) | (user_id, started_at) |
 | `training_sets` | id (UUID) | UNIQUE(session_id, order_index), (session_id, order_index), (exercise_id) |
 | `personal_records` | id (UUID) | partial-UNIQUE(user_id, exercise_id, kind) WHERE weight_bucket IS NULL, partial-UNIQUE(user_id, exercise_id, kind, weight_bucket) WHERE NOT NULL, (user_id, exercise_id) |
+| `principles` | id (UUID) | UNIQUE(key), (category) |
+| `principle_citations` | id | UNIQUE(principle_id, title) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -128,6 +131,29 @@ return any PRs in a `prs` field (→ the live `PRCelebration` banner); `GET /api
 lists the persisted records. `personal_records` is one row per (user, exercise, kind, weight_bucket)
 — `weight_bucket` NULL for the three weight-independent kinds, the load for `reps_at_weight` — keyed
 by two partial unique indexes (NULLs compare distinct in a plain unique) so it never double-counts.
+
+**Principles KB** (the cited exercise-science rules — CONTEXT.md "Principle"; ADR-0004; #12). The
+versioned knowledge base the Program generator (#13) composes from and the receipts UI (#14) taps,
+so every prescribed training parameter traces to peer-reviewed evidence. `principles` is one row per
+rule keyed on a stable `key` slug (e.g. `volume-dose-response`): a `statement`, a native-enum
+`category` (volume/frequency/intensity/progression/periodization/deload/rest/nutrition), a **JSONB
+`params`** dict of typed ranges the generator reads (`{name: {min?, max?, value?, unit?}}`, e.g.
+`{"sets_per_muscle_per_week": {"min":10,"max":20,"unit":"sets"}}`), applicability as two JSONB arrays
+(`goals` over the `training_goal` enum bulk/cut/maintain/strength, `experience_levels` over
+`experience_level` beginner/intermediate/advanced — **empty array ⇒ applies to all**), a native-enum
+`evidence_grade` (A/B/C = strong/moderate/limited), and a `version` + `updated_at` (the seed bumps
+`version` only when a rule's substance changes). `TrainingGoal`/`ExperienceLevel` live in
+`models/principle.py` — the canonical home for the CONTEXT.md Goal vocabulary #13/#15 consume.
+Citations are normalized one-to-many in `principle_citations` (authors/year/title/journal + DOI/PMID/URL;
+`resolved_url` prefers explicit URL → doi.org → PubMed). The query interface is
+`services/principles_query.py`: `applicable_principles(goal, experience, category)` (the SQL
+applicability filter — empty list OR JSONB-contains — mirrored by `Principle.applies_to`),
+`principle_by_key`, and `list_principles`. API `/api/principles` (browse, or scope by
+`?goal=&experience=`; `/categories`; `/{key}`) is auth-gated and read-only — content is seed-managed.
+The KB is **in-code** (`services/seed_principles.py`'s `PRINCIPLES`, idempotent upsert by `key` + citation
+reconciliation), not a vendored dataset, because it is small and hand-authored; **every citation was
+verified against PubMed/DOI at authoring time** (verification log in the seed module docstring) — never
+fabricate or paraphrase an unverified source.
 
 ## Ingestion Pipeline
 
@@ -206,14 +232,15 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `e7a9c1d3f5b7`
-(`add personal records`).
+Alembic migrations in `backend/alembic/versions/`. Current head: `a1b2c3d4e5f6`
+(`add principles knowledge base`).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
-After migrations, `entrypoint.sh` also runs `python -m app.services.seed_exercises` to
-idempotently upsert the shared Exercise library from the vendored free-exercise-db dataset
-(best-effort — a seed failure does not block boot). Runnable manually with the same command.
+After migrations, `entrypoint.sh` runs two idempotent seeds (best-effort — a seed failure
+does not block boot), each runnable manually via the same `python -m` command:
+`app.services.seed_exercises` (the shared Exercise library from the vendored free-exercise-db
+dataset) and `app.services.seed_principles` (the cited Principles KB, ADR-0004).
 
 ## CI/CD
 
