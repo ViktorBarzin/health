@@ -26,6 +26,7 @@
     if (path === '/') return 'Dashboard';
     if (path.startsWith('/metrics')) return 'Metrics';
     if (path.startsWith('/workouts')) return 'Workouts';
+    if (path.startsWith('/exercises')) return 'Exercises';
     if (path.startsWith('/sleep')) return 'Sleep';
     if (path.startsWith('/body')) return 'Body';
     if (path.startsWith('/trends')) return 'Trends';

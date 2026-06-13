@@ -74,6 +74,42 @@ export interface ImportStatus {
   error_message?: string | null;
 }
 
+export interface ExerciseSummary {
+  id: string;
+  name: string;
+  category: string | null;
+  equipment: string | null;
+  level: string | null;
+  mechanic: string | null;
+  force: string | null;
+  primary_muscles: string[];
+  secondary_muscles: string[];
+  images: string[];
+  is_custom: boolean;
+  demo_video_url: string;
+}
+
+export interface ExerciseDetail extends ExerciseSummary {
+  instructions: string[];
+}
+
+export interface MuscleOption {
+  value: string;
+  label: string;
+}
+
+export interface ExerciseCreate {
+  name: string;
+  category?: string | null;
+  equipment?: string | null;
+  level?: string | null;
+  mechanic?: string | null;
+  force?: string | null;
+  instructions: string[];
+  primary_muscles: string[];
+  secondary_muscles: string[];
+}
+
 export interface ActivityRingData {
   date: string;
   active_energy_burned_kj: number | null;
