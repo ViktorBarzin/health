@@ -42,7 +42,8 @@ backend/app/
 │   ├── metrics.py    # /api/metrics — available metrics + time-series queries
 │   ├── workouts.py   # /api/workouts — list/detail with route points
 │   ├── activity.py   # /api/activity — activity rings
-│   ├── ingestion.py  # /api/import — upload/status/cancel/delete
+│   ├── ingestion.py  # /api/import — upload/status/cancel/delete (Apple Health XML/ZIP)
+│   ├── fitbod.py     # /api/import/fitbod — preview + commit (Fitbod CSV import, #9)
 │   ├── exercises.py  # /api/exercises — browse/search/detail/create-custom (Exercise library)
 │   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
 │   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
@@ -68,7 +69,10 @@ backend/app/
 │   ├── readiness.py   # Pure daily biometric Readiness core (HRV/RHR/sleep vs baseline) (#14)
 │   ├── autoregulation.py # Pure day-adjuster: trim/keep within Principle bounds + early-deload (#14)
 │   ├── adjust.py      # Conversational-adjust ABC + deterministic provider + validate/apply (#14)
-│   └── adjust_agent.py # Gated claude-agent-service adjust provider (proposes-only; falls back) (#14)
+│   ├── adjust_agent.py # Gated claude-agent-service adjust provider (proposes-only; falls back) (#14)
+│   ├── fitbod_parser.py # Pure Fitbod-CSV parser (by column NAME; kg/lb; warmup; group→Sessions; skip cardio) (#9)
+│   ├── matcher.py     # Pure exercise-name matcher (normalise + alias; unresolved→manual) (#9)
+│   └── fitbod_import.py # Fitbod import DB glue: preview + idempotent (Session-grain) commit + PRs + Source (#9)
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -268,6 +272,39 @@ ADR-0002 + ADR-0004; #14). Four pure cores (no DB/clock/LLM; query layers inject
   pure helpers in `lib/readiness.ts` (+ `lib/program.ts` receipt/grade helpers). **No new DB tables** — Readiness
   reads existing health tables; autoregulation/adjust are in-memory transforms (Alembic head unchanged).
 
+**Fitbod CSV import** (the set-level strength-history seed — CONTEXT.md "Import"/"Source"; #9). Imports a
+user's Fitbod "Export Workout Data" CSV into the live Session/Set tables — the only source of set-level
+strength history, so it seeds Progression/Recovery/PRs. Two **pure, tested** cores + a DB-glue + a 2-step API:
+- **`services/fitbod_parser.py`** — parses the CSV **by column NAME, not position** (Fitbod's columns vary by
+  app version): header is `Date,Exercise,Reps,Weight(kg|lbs),Duration(s),Distance(m),Incline,Resistance,isWarmup,Note,multiplier`;
+  the **weight unit lives in the header suffix** (`Weight(kg)` vs `Weight(lbs)`/`(lb)` → lb×0.45359237→kg, unmarked=kg);
+  Date is `%Y-%m-%d %H:%M:%S %z` (e.g. `2021-12-27 10:02:51 +0000`, with tz-less/ISO fallbacks). Rows are
+  **grouped into Sessions by their Date timestamp** (every set in one workout shares it; `started_at`=that time,
+  `ended_at` set since imports are finished historical records); `isWarmup` truthy→`set_type=warmup` else `normal`.
+  **Non-strength rows are skipped, not turned into garbage Sets**: weight≤0 AND reps≤0 (cardio/distance/duration-only)
+  is dropped + counted in `skipped_rows`; bodyweight (weight 0, reps>0) is kept. Quoted/embedded-comma fields via stdlib `csv`.
+- **`services/matcher.py`** — pure exercise-name matcher: `normalize_exercise_name` (lower, `-`/`/`→space, strip
+  punct, collapse ws), then exact-normalised match against the visible library, then a **curated alias table**
+  (Fitbod "Back Squat"↦library "Barbell Squat", etc.) that only fires when its target exists (never invents a
+  match; exact always wins). `ExerciseNameIndex.resolve_all` → `(resolved {name:id}, sorted unresolved)`.
+  Deliberately conservative — no fuzzy distance (would silently mis-map); unresolved names go to the manual-match UI.
+- **`services/fitbod_import.py`** — DB glue. `preview_fitbod_import` (parse+match, NO writes) returns counts +
+  unmatched names + per-name set counts; `commit_fitbod_import` writes idempotently. **Idempotency is at the
+  Session grain**: a Session id = `uuid5(NS, f"{user_id}|{started_at_iso}")`, and a Session that already exists for
+  the user is **skipped whole** (an imported workout is immutable; we never backfill sets into it) — re-importing
+  adds only new workouts. This is both correct semantics AND avoids a `(session_id, order_index)` unique-constraint
+  collision that set-level backfill would hit when the resolution set changed across runs (regression-tested). A
+  `resolutions` map (raw name→Exercise id from the UI) overrides auto-matches and is **visibility-filtered** (global
+  ∪ own — a foreign private id is dropped); still-unresolved names are skipped + counted. PRs are reconciled once
+  per touched Exercise (warmup/zero-load excluded by `pr_service`). Registers a **Fitbod `DataSource`** + an
+  `ImportBatch` audit row. **No new tables / no migration** (Alembic head unchanged) — reuses `training_sessions`/
+  `training_sets`/`data_sources`/`import_batches`.
+- **API** `POST /api/import/fitbod/preview` + `/commit` (JSON `csv_text` — the history is KBs, so it travels as text,
+  not the multi-GB chunked-multipart Apple Health path; commit re-sends the text + resolutions, stateless + idempotent).
+- **Frontend** `lib/fitbod.ts` (`looksLikeFitbodCsv` — pure header sniff to reject a wrong file before upload, vitest)
+  + `components/import/FitbodImport.svelte` (mobile flow: upload → preview/summary → resolve unmatched via the reused
+  `ExercisePicker` bottom-sheet or "create custom" → confirm → done), wired into the **settings page**.
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -300,6 +337,7 @@ frontend/src/
 │   ├── api.ts          # API client (fetch with credentials: include)
 │   ├── types.ts        # TypeScript interfaces
 │   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
+│   ├── fitbod.ts       # Pure looksLikeFitbodCsv header-sniff (reject wrong file pre-upload, vitest) (#9)
 │   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
 │   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
 │   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
@@ -310,7 +348,7 @@ frontend/src/
 │   ├── components/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
-│   │   ├── import/     # XmlUpload, ImportStatus
+│   │   ├── import/     # XmlUpload, ImportStatus, FitbodImport (CSV → preview → resolve → commit, #9)
 │   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts

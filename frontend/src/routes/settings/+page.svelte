@@ -5,6 +5,7 @@
   import { formatDate } from '$lib/utils/format';
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
+  import FitbodImport from '$lib/components/import/FitbodImport.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
 
   let imports = $state<ImportStatusType[]>([]);
@@ -84,6 +85,15 @@
         </div>
       {/if}
     </div>
+  </section>
+
+  <!-- Fitbod Import Section -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Import from Fitbod</h2>
+      <p class="text-sm text-surface-500 mt-1">Bring your Fitbod workout history in as Sessions — it seeds your strength records and progression.</p>
+    </div>
+    <FitbodImport />
   </section>
 
   <!-- Account Section -->

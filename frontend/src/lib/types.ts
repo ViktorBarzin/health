@@ -477,3 +477,36 @@ export interface GenerateProgramRequest {
   days_per_week?: number;
   session_minutes?: number;
 }
+
+// --- Fitbod CSV import (#9) ---
+
+/** A Fitbod exercise name that auto-matched to a library Exercise. */
+export interface FitbodMatchedName {
+  fitbod_name: string;
+  exercise_id: string;
+  exercise_name: string;
+}
+
+/** A Fitbod exercise name the user must resolve (pick or create an Exercise). */
+export interface FitbodUnresolvedName {
+  fitbod_name: string;
+  set_count: number;
+}
+
+/** Dry-run summary of a Fitbod CSV before committing the import. */
+export interface FitbodPreview {
+  session_count: number;
+  set_count: number;
+  skipped_rows: number;
+  matched: FitbodMatchedName[];
+  unresolved: FitbodUnresolvedName[];
+}
+
+/** The outcome of a committed Fitbod import. */
+export interface FitbodImportResult {
+  batch_id: string;
+  sessions_created: number;
+  sets_created: number;
+  unresolved_skipped: number;
+  skipped_rows: number;
+}
