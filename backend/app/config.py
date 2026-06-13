@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     # proposal.
     CLAUDE_AGENT_TIMEOUT_SECONDS: float = 20.0
 
+    # Master key for encrypting per-user Connection credentials at rest (BYOT
+    # integrations — connections). A user's pasted API token (e.g. an Oura
+    # Personal Access Token) is NEVER stored in plaintext: it is Fernet-encrypted
+    # with this key before insert and only ever decrypted in-memory at pull time.
+    # The value is a URL-safe base64-encoded 32-byte key — generate one with
+    # ``python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"``.
+    # In production it MUST be supplied from the secret store (Vault
+    # secret/health-connection-key), exactly like CLAUDE_AGENT_TOKEN — never
+    # committed. To rotate, prepend a fresh key to a comma-separated list: the
+    # first key encrypts new tokens, the rest still decrypt old ones (MultiFernet
+    # rotation — see app.services.crypto). When unset, the Connection feature is
+    # simply disabled (the API returns a clear 503) rather than storing tokens
+    # unprotected — fail closed, never plaintext.
+    CONNECTION_ENCRYPTION_KEY: str | None = None
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

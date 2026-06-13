@@ -51,7 +51,8 @@ backend/app/
 │   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
 │   ├── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
 │   ├── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
-│   └── nutrition.py  # /api/nutrition — Food catalog + Diary CRUD + day/history (#21); barcode→OFF, custom Foods, Recipes (#22)
+│   ├── nutrition.py  # /api/nutrition — Food catalog + Diary CRUD + day/history (#21); barcode→OFF, custom Foods, Recipes (#22)
+│   └── connections.py # /api/connections — per-user BYOT integrations: list/connect(paste token)/sync-now/disconnect (Oura, ADR-0006)
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -79,7 +80,14 @@ backend/app/
 │   ├── seed_foods.py  # Idempotent generic whole-foods Food-catalog seed (in-code; upsert by slug) (#21)
 │   ├── weight_trend.py # Pure weight-trend smoother: time-aware EMA "true weight" + OLS-slope rate (kg/wk, %BW/wk) (#23)
 │   ├── budget.py      # Pure Budget: adaptive TDEE from energy balance + goal-driven calorie/macro target (#23)
-│   └── budget_query.py # Budget glue: BodyMass→trend, Diary intake, protein Principle, active-Program goal → cores (#23)
+│   ├── budget_query.py # Budget glue: BodyMass→trend, Diary intake, protein Principle, active-Program goal → cores (#23)
+│   ├── crypto.py      # Fernet credential cipher (encrypt-at-rest for Connection tokens; MultiFernet rotation) (connections)
+│   ├── connection_query.py # Connection CRUD (encrypt) + sync_connection (decrypt→pull→dedup-ingest, idempotent) + sync_all_active (connections)
+│   ├── connection_sync_cli.py # `python -m` scheduled-pull entrypoint a K8s CronJob invokes (connections)
+│   └── connectors/    # SourceConnector ABC + registry + provider impls (connections, ADR-0006):
+│       ├── base.py    #   ABC: pull(credential, since)→NormalizedRecord[]; ConnectorError/ConnectorAuthError
+│       ├── oura.py    #   Oura API v2 (BYOT/PAT): sleep docs → HRV/RHR/SleepAnalysis, injectable httpx (mock in tests)
+│       └── __init__.py #   _REGISTRY (one entry per provider) + get_connector / available_providers
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -111,6 +119,7 @@ backend/app/
 | `foods` | id (UUID) | partial-UNIQUE(slug) WHERE user_id IS NULL, partial-UNIQUE(user_id, slug) WHERE user_id IS NOT NULL, (user_id) |
 | `diary_entries` | id (UUID) | (user_id, entry_date) |
 | `recipes` | id (UUID) | UNIQUE(food_id), (user_id) |
+| `connections` | id (UUID) | UNIQUE(user_id, provider) |
 | `recipe_ingredients` | id (UUID) | (recipe_id), (food_id) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
@@ -460,6 +469,56 @@ ADR-0004; #23). Two **pure, tested** cores behind a query layer (no DB/clock/IO;
   and an "estimated" footnote when the fallback is active. **No forecast UI** (ADR-0004 cut) — current Budget + current
   trend only, no "you'll hit X by date Y" projection.
 
+**Per-user Connections — BYOT integrations** (the opt-in data-source framework — CONTEXT.md "Connector"/"Source"/"Import"/
+"Metric"; ADR-0006, the **BYOT variant**: each user pastes their OWN token rather than an infra-gated push receiver or a
+single-app OAuth). The framework + one reference provider (Oura), structured so more providers slot in:
+- **`connections` table / `models/connection.py`** — one row per `(user_id, provider)` (UNIQUE). `provider` + `status`
+  (active/error/disabled) are native enums (extensible by a label). The user's credential lives ONLY in
+  `encrypted_credential` (a `bytea` of Fernet ciphertext) — **never plaintext, never logged, never returned** (there is no
+  plaintext/masked/last-4 column at all, so a leak is structurally impossible from a row read). Operational metadata:
+  `last_sync_at`, `last_error` (credential-free), timestamps.
+- **Encryption at rest** (`services/crypto.py`, security-critical) — **Fernet** (authenticated AES-128-CBC+HMAC, the
+  `cryptography` recipes layer). `CredentialCipher.from_settings()` reads `CONNECTION_ENCRYPTION_KEY` (URL-safe base64
+  32-byte key; comma-separated = **MultiFernet rotation**, new key encrypts / all keys decrypt). **Fail closed**: no key ⇒
+  the API 503s, we never store a token unprotected. Encrypt before insert; decrypt only in-memory at pull time. Tested:
+  round-trip, ciphertext≠plaintext (the secret never appears in the bytes), wrong-key/tamper → `InvalidToken`, rotation.
+- **`SourceConnector` ABC** (`services/connectors/base.py`) — `pull(credential, since) -> NormalizedRecord[]`; the connector
+  is DB-free pure-mapping (HTTP in, normalized records out) so it's trivially mockable. A `NormalizedRecord` targets either
+  `health_records` (`kind=metric`) or `category_records` (`kind=category`) via one discriminator. `ConnectorAuthError`
+  (invalid/expired token) vs `ConnectorError` (transient). **Registry** (`connectors/__init__.py` `_REGISTRY`): adding a
+  provider is one enum label + one subclass + one registry entry — nothing else changes.
+- **Oura reference provider** (`services/connectors/oura.py`, BYOT/PAT — no app registration, no OAuth, no infra host) —
+  pulls **Oura API v2** `GET /v2/usercollection/sleep` (one call carries all three signals) with `Authorization: Bearer
+  <PAT>`, maps per-night: `average_hrv`→`HeartRateVariabilitySDNN` (ms), `lowest_heart_rate`→`RestingHeartRate` (count/min),
+  `total_sleep_duration`→a `SleepAnalysis` asleep interval ending at `bedtime_end` (raw `HKCategoryValueSleepAnalysisAsleep`
+  value + cleaned `"Asleep"` label, mirroring the XML importer) — so **Readiness (#14) consumes Oura data identically to
+  Apple data**. Honesty rule: a night missing a metric contributes only what it has (never a fake 0). Injectable httpx
+  transport ⇒ tests MOCK Oura (no network, the OFF pattern). 401/403 → `ConnectorAuthError`; 5xx → `ConnectorError`.
+- **Sync** (`services/connection_query.py`) — `sync_connection` decrypts the credential **in memory**, calls
+  `connector.pull(since=last_sync_at)`, lands the records via the **existing idempotent dedup** (`bulk_insert_health_records`
+  / `bulk_insert_category_records` — ON CONFLICT DO NOTHING on each table's natural key, so a re-pull adds nothing),
+  registers an Oura **`DataSource`** + an **`ImportBatch`** audit row, and updates status/`last_sync_at`/`last_error`. A
+  `ConnectorError` is caught → `status=error` with a clear, **token-free** message (never crashes). `sync_all_active` syncs
+  every active Connection independently (commits per-connection; one failure can't abort the rest) — the **scheduled-puller**
+  kind, invoked by `python -m app.services.connection_sync_cli` (the **K8s CronJob** manifest is infra/HITL — documented stub
+  in `docs/connectors/oura-cronjob.md`; the command itself works + is tested).
+- **API** (`api/connections.py`, all `get_current_user`-scoped) — `GET /api/connections` (catalog + this user's state, token
+  NEVER returned), `POST /api/connections` (connect: paste token; 503 if no key), `POST /api/connections/{provider}/sync`
+  (sync now; an invalid token reports `status=error` at HTTP 200, not a 500), `DELETE /api/connections/{provider}`
+  (disconnect). Per-user scoped: a user can't read/sync/disconnect another's Connection (404). The connect token is
+  **write-only** (a request field on `ConnectionConnect` only — no read schema has a token field).
+- **Frontend** — `lib/connections.ts` (PURE view-logic: `statusLabel`/tone, `lastSyncSummary` relative time, `canSync`/
+  `canSubmitToken` gates; vitest `connections.test.ts`) + `components/settings/Connections.svelte` (mobile-first: list
+  providers → "Connect Oura" reveals a **password** PAT field + a "get your token" link to cloud.ouraring.com → save & sync →
+  status badge + last-synced + Sync now + Update token + Disconnect). The token field is write-only and cleared from memory
+  immediately after submit; it is never rendered back. Wired into the **settings page** as a "Connections" section.
+- **Extending (documented, NOT built — YAGNI)**: **Whoop** (OAuth-gated, deferred until an app is registered) = a new
+  `ConnectionProvider.whoop` label + a `WhoopConnector` whose stored credential is the OAuth access/refresh token the
+  connector refreshes (the connect flow becomes a redirect instead of a paste; `token_based=False`). **Garmin** (no official
+  individual API — the "allowed-but-clearly-flagged" unofficial path) = a `GarminConnector` over python-garminconnect whose
+  credential is the username/password it logs in with, labelled unofficial. Both reuse the SAME encrypted-credential storage,
+  idempotent ingest, Source/ImportBatch bookkeeping, sync endpoint, scheduler, and UI — only the connector class is new.
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -550,8 +609,9 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `d4e5f6a7b8c9`
-(`add recipes + recipe ingredients`, #22; chains off `c3d4e5f6a7b8` nutrition).
+Alembic migrations in `backend/alembic/versions/`. Current head: `e5f6a7b8c9d0`
+(`add per-user Connections (BYOT integrations)`, connections/ADR-0006; chains off
+`d4e5f6a7b8c9` recipes).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
@@ -580,6 +640,12 @@ CLAUDE_AGENT_URL=...   # claude-agent-service base URL (default the in-cluster s
 CLAUDE_AGENT_TOKEN=... #   bearer from Vault secret/claude-agent-service. Read only
                        #   when ADJUST_PROVIDER=claude-agent; on any failure the
                        #   adjust falls back to the deterministic provider.
+CONNECTION_ENCRYPTION_KEY=...  # Fernet key (URL-safe base64 32-byte) encrypting
+                       #   per-user Connection credentials at rest (BYOT, connections).
+                       #   Prod: from Vault secret/health-connection-key — the SAME
+                       #   value on the app AND the sync CronJob. Comma-separated
+                       #   list = key rotation (new,old). UNSET ⇒ Connections
+                       #   disabled (API 503) — fail closed, never store plaintext.
 ```
 
 Set in `.env` file, loaded by docker-compose.

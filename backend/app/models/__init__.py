@@ -28,6 +28,11 @@ from app.models.program import (
 from app.models.food import Food
 from app.models.diary_entry import DiaryEntry, Meal
 from app.models.recipe import Recipe, RecipeIngredient
+from app.models.connection import (
+    Connection,
+    ConnectionProvider,
+    ConnectionStatus,
+)
 
 __all__ = [
     "User",
@@ -63,4 +68,7 @@ __all__ = [
     "Meal",
     "Recipe",
     "RecipeIngredient",
+    "Connection",
+    "ConnectionProvider",
+    "ConnectionStatus",
 ]

@@ -8,6 +8,7 @@
   import FitbodImport from '$lib/components/import/FitbodImport.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
   import ExportData from '$lib/components/settings/ExportData.svelte';
+  import Connections from '$lib/components/settings/Connections.svelte';
 
   let imports = $state<ImportStatusType[]>([]);
   let activeBatchId = $state<string | undefined>(undefined);
@@ -42,6 +43,15 @@
       <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
     </div>
     <GymProfileSettings />
+  </section>
+
+  <!-- Connections Section (BYOT integrations, ADR-0006) -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Connections</h2>
+      <p class="text-sm text-surface-500 mt-1">Connect a device or app with your own access token to bring in HRV, resting heart rate and sleep — powering your daily Readiness.</p>
+    </div>
+    <Connections />
   </section>
 
   <!-- Data Import Section -->

@@ -13,6 +13,9 @@ dependencies = [
     "python-multipart>=0.0.12,<1",
     "lxml>=5.3,<6",
     "aiofiles>=24.1,<25",
+    # Symmetric authenticated encryption (Fernet) for per-user Connection
+    # credentials stored encrypted at rest (BYOT integrations — connections).
+    "cryptography>=44,<46",
 ]
 
 [project.optional-dependencies]

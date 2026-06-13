@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.activity import router as activity_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
+from app.api.connections import router as connections_router
 from app.api.dashboard import router as dashboard_router
 from app.api.exercises import router as exercises_router
 from app.api.export import router as export_router
@@ -48,4 +49,7 @@ router.include_router(
 )
 router.include_router(
     nutrition_router, prefix="/api/nutrition", tags=["nutrition"]
+)
+router.include_router(
+    connections_router, prefix="/api/connections", tags=["connections"]
 )

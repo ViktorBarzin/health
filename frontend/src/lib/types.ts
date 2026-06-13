@@ -690,3 +690,45 @@ export interface Budget {
   intake_days: number;
   trend: WeightTrend;
 }
+
+// --- Connections (BYOT integrations, ADR-0006): per-user opt-in data sources ---
+
+/** Operational state of a Connection (mirrors the backend ConnectionStatus enum). */
+export type ConnectionStatus = 'active' | 'error' | 'disabled';
+
+/** One connectable provider + this user's connection state (the settings list).
+ *
+ * Deliberately carries NO token/credential field — the user's token is
+ * write-only and never returned by the API.
+ */
+export interface ConnectionProviderInfo {
+  provider: string;
+  label: string;
+  description: string;
+  /** Where the user generates their token (the "get your token" link). */
+  instructions_url: string;
+  /** True for a bring-your-own-token provider (a paste field); the only kind now. */
+  token_based: boolean;
+  connected: boolean;
+  status: ConnectionStatus | null;
+  last_sync_at: string | null;
+  last_error: string | null;
+}
+
+/** A Connection as returned after connecting — status only, never the token. */
+export interface ConnectionRead {
+  provider: string;
+  connected: boolean;
+  status: ConnectionStatus;
+  last_sync_at: string | null;
+  last_error: string | null;
+}
+
+/** Outcome of a "sync now" — status + how much landed, never the token. */
+export interface ConnectionSyncResult {
+  provider: string;
+  status: ConnectionStatus;
+  records_ingested: number;
+  last_sync_at: string | null;
+  last_error: string | null;
+}
