@@ -29,7 +29,9 @@ _KEY = Fernet.generate_key().decode()
 _OTHER_KEY = Fernet.generate_key().decode()
 
 # A representative Oura-style PAT — opaque, secret, must never leak.
-_TOKEN = "QWERTY1234567890ABCDEFGHIJKLMNOPQRSTUVWX2Z"
+# Deliberately a LOW-entropy obviously-fake string: the tests only need *a*
+# non-empty value to round-trip, and a high-entropy literal trips secret scanners.
+_TOKEN = "fake-token-for-crypto-tests"
 
 
 def test_round_trip_recovers_the_exact_plaintext() -> None:

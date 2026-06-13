@@ -31,7 +31,7 @@ from app.models.connection import Connection, ConnectionProvider
 from app.models.user import User
 
 _KEY = Fernet.generate_key().decode()
-_TOKEN = "OURA-PAT-API-SECRET-9f8e7d6c5b4a3210"
+_TOKEN = "fake-oura-token-not-a-secret"
 
 _OURA_SLEEP = {
     "data": [
@@ -195,7 +195,7 @@ async def test_validation_error_never_echoes_the_token(client, db_session):
     The custom handler redacts `input`, so the secret must be absent from the body
     while the response stays a well-formed 422 with the missing-field error.
     """
-    secret = "OURA-PAT-MUST-NOT-LEAK-IN-422-abc123"
+    secret = "fake-token-must-not-leak"
     alice = await _make_user(db_session, "alice@example.com")
     client.set_user(alice)
 

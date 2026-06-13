@@ -55,7 +55,7 @@ from app.services.connection_query import (
 from cryptography.fernet import Fernet
 
 _KEY = Fernet.generate_key().decode()
-_TOKEN = "OURA-PAT-SECRET-7c3f9b2a1e4d8f6a0b5c2d1e"
+_TOKEN = "fake-oura-token-not-a-secret"
 
 _NOW = dt.datetime(2026, 6, 12, 12, 0, tzinfo=dt.timezone.utc)
 _BEDTIME_END = dt.datetime(2026, 6, 10, 7, 30, tzinfo=dt.timezone.utc)
