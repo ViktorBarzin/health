@@ -57,7 +57,10 @@ backend/app/
 │   ├── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
 │   ├── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
 │   ├── effort.py      # Pure Effort RIR↔RPE mapping (one-tap chip ↔ stored RPE-equivalent)
-│   └── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
+│   ├── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
+│   ├── e1rm.py        # Pure estimated-1RM core (1-rep-anchored Epley + optional RIR adjust)
+│   ├── pr.py          # Pure PR detection (4 dimensions; normal-only; strict-improvement)
+│   └── pr_service.py  # PR persistence: prior-bests-from-history + authoritative upsert
 ├── data/          # Vendored datasets (free_exercise_db.json, pinned by .SHA)
 ├── config.py      # Pydantic settings from env
 ├── database.py    # Engine + session factory (pool_pre_ping=True)
@@ -80,6 +83,7 @@ backend/app/
 | `exercise_muscles` | id | UNIQUE(exercise_id, muscle, role), (muscle) |
 | `training_sessions` | id (UUID) | (user_id, started_at) |
 | `training_sets` | id (UUID) | UNIQUE(session_id, order_index), (session_id, order_index), (exercise_id) |
+| `personal_records` | id (UUID) | partial-UNIQUE(user_id, exercise_id, kind) WHERE weight_bucket IS NULL, partial-UNIQUE(user_id, exercise_id, kind, weight_bucket) WHERE NOT NULL, (user_id, exercise_id) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -106,6 +110,24 @@ add, compact on delete, two-phase rewrite on reorder). All endpoints are per-use
 `get_current_user`; a Set is reached only through its owning Session. API: `/api/sessions`
 (start/list/get/finish/delete a Session; `/{id}/sets` add, `/{id}/sets/{set_id}` PATCH/DELETE,
 `/{id}/sets/order` PUT reorder).
+
+**PR detection + e1RM** (the strength-signal engine core — CONTEXT.md "PR"). Two **pure** modules
+are the canonical definitions reused by analytics (#10) and progression (#11): `services/e1rm.py`
+(estimated 1RM = **1-rep-anchored Epley** `w·(1 + (reps-1)/30)` so reps=1 → exactly the weight;
+optional Effort adjustment folds RIR in as `effective_reps = reps + rir` — a set with reserve is
+heavier, so the estimate rises and never falls) and `services/pr.py` (`detect_prs` over four
+dimensions — best **weight**, best **e1rm**, best **reps_at_weight** keyed per load, best single-set
+**volume**; only `normal` sets via `volume.counts_for_volume`; strict improvement so ties aren't PRs;
+first-ever set PRs on every dimension). The algorithm is **mirrored in TypeScript**
+(`frontend/src/lib/pr.ts`, with `pr.test.ts` mirroring the backend cases) so PR detection fires
+**instantly client-side while offline** (ADR-0005) with no round-trip. The backend is the
+record-of-truth: `services/pr_service.py` recomputes prior-bests-from-history (excluding the
+candidate set) on every add/edit and upserts authoritative `personal_records`, so deletes/edits/
+offline races never leave a false or duplicate PR. `POST /{id}/sets` and `PATCH /{id}/sets/{set_id}`
+return any PRs in a `prs` field (→ the live `PRCelebration` banner); `GET /api/sessions/prs?exercise_id=`
+lists the persisted records. `personal_records` is one row per (user, exercise, kind, weight_bucket)
+— `weight_bucket` NULL for the three weight-independent kinds, the load for `reps_at_weight` — keyed
+by two partial unique indexes (NULLs compare distinct in a plain unique) so it never double-counts.
 
 ## Ingestion Pipeline
 
@@ -138,6 +160,7 @@ frontend/src/
 ├── lib/
 │   ├── api.ts          # API client (fetch with credentials: include)
 │   ├── types.ts        # TypeScript interfaces
+│   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
 │   ├── stores/
 │   │   ├── auth.svelte.ts      # Current user from /api/auth/me (forward-auth)
 │   │   └── date-range.svelte.ts # Global date range + resolution
@@ -145,7 +168,7 @@ frontend/src/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus
-│   │   ├── sessions/   # ExercisePicker (bottom-sheet), SetTypeChip, EffortChips (RIR)
+│   │   ├── sessions/   # ExercisePicker (bottom-sheet), SetTypeChip, EffortChips (RIR), PRCelebration (banner)
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/
@@ -183,8 +206,8 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `d4f6a8c0e2b5`
-(`add training sessions and sets`).
+Alembic migrations in `backend/alembic/versions/`. Current head: `e7a9c1d3f5b7`
+(`add personal records`).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 

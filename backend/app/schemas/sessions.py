@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.models.training_session import SetType
 from app.services.effort import rpe_to_rir
+from app.services.pr import PRKind
 
 
 class SetCreate(BaseModel):
@@ -84,6 +85,63 @@ class SetRead(BaseModel):
             "set_type": data.set_type,
             "effort_rir": rpe_to_rir(rpe),
             "exercise_name": getattr(exercise, "name", None),
+        }
+
+
+class PRReadout(BaseModel):
+    """One personal record a written Set achieved, for the live celebration.
+
+    Mirrors :class:`app.services.pr.PRResult`. ``kind`` is the dimension; ``value``
+    is the new record (kg / estimated kg / reps / kg·reps depending on kind);
+    ``at_weight_kg`` is the weight a reps-at-weight PR was set at, else ``None``.
+    The frontend phrases the banner from these ("New 5-rep PR — 100 kg!").
+    """
+
+    kind: PRKind
+    value: float
+    at_weight_kg: float | None = None
+
+
+class SetWriteResult(SetRead):
+    """A written (added/edited) Set plus any PRs it set.
+
+    Extends :class:`SetRead` so the client still gets the full Set back; ``prs`` is
+    empty unless the write beat the user's history on one or more dimensions. The
+    detection is server-authoritative — the offline client celebrates immediately
+    from its own mirror of the algorithm, and this reconciles it on sync.
+    """
+
+    prs: list[PRReadout] = []
+
+
+class PersonalRecordRead(BaseModel):
+    """A persisted personal record row, as returned by the PR query endpoint.
+
+    The authoritative current best on one dimension for an Exercise. ``at_weight_kg``
+    is set only for the reps-at-weight kind. ``achieved_at`` lets the client sort
+    or surface "set on <date>".
+    """
+
+    exercise_id: uuid.UUID
+    kind: PRKind
+    value: float
+    at_weight_kg: float | None = None
+    achieved_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_orm(cls, data: object) -> object:
+        """Map the ORM ``weight_bucket`` column onto the wire ``at_weight_kg``."""
+        if isinstance(data, dict):
+            return data
+        return {
+            "exercise_id": data.exercise_id,
+            "kind": data.kind,
+            "value": data.value,
+            "at_weight_kg": data.weight_bucket,
+            "achieved_at": data.achieved_at,
         }
 
 

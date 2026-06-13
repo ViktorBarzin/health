@@ -462,3 +462,174 @@ async def test_cannot_edit_or_delete_another_users_set(client, db_session) -> No
     client.set_user(alice)
     detail = (await client.get(f"/api/sessions/{sid}")).json()
     assert detail["sets"][0]["reps"] == 5
+
+
+# --------------------------------------------------------------------------- #
+# PR detection + celebration (the live record-of-truth on write)
+# --------------------------------------------------------------------------- #
+
+
+async def test_first_set_returns_prs_on_every_dimension(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    body = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+        )
+    ).json()
+    kinds = {p["kind"] for p in body["prs"]}
+    assert kinds == {"weight", "e1rm", "reps_at_weight", "volume"}
+    # The reps PR carries the weight it happened at, for the banner copy.
+    reps_pr = next(p for p in body["prs"] if p["kind"] == "reps_at_weight")
+    assert reps_pr["at_weight_kg"] == 100.0
+    assert reps_pr["value"] == 5.0
+
+
+async def test_non_normal_set_returns_no_prs(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    body = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={
+                "exercise_id": str(ex.id),
+                "weight_kg": 300,
+                "reps": 10,
+                "set_type": "warmup",
+            },
+        )
+    ).json()
+    assert body["prs"] == []
+
+
+async def test_second_weaker_set_does_not_re_pr(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Deadlift")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 200, "reps": 5},
+    )
+    # A weaker set at the SAME weight ties nothing new (200 already the best, and
+    # 200 kg is a known weight with 5 reps; 3 reps < 5 → not even a reps PR).
+    second = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 200, "reps": 3},
+        )
+    ).json()
+    assert second["prs"] == []
+
+
+async def test_editing_weight_up_creates_a_pr(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Overhead Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    # Seed a 50 kg set so the second set has history to beat after editing.
+    await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 50, "reps": 5},
+    )
+    second_set = (
+        await client.post(
+            f"/api/sessions/{sid}/sets",
+            json={"exercise_id": str(ex.id), "weight_kg": 40, "reps": 5},
+        )
+    ).json()
+    # 40 < 50 so no weight/e1rm/volume PR, but 40 kg is a new weight bucket →
+    # a first-at-weight reps PR.
+    assert {p["kind"] for p in second_set["prs"]} == {"reps_at_weight"}
+
+    # Correct that second set's weight up to 60 → now beats the 50 kg history on
+    # weight + e1rm + volume (60×5=300 > 250), and 60 is again a new weight bucket.
+    patched = (
+        await client.patch(
+            f"/api/sessions/{sid}/sets/{second_set['id']}",
+            json={"weight_kg": 60},
+        )
+    ).json()
+    kinds = {p["kind"] for p in patched["prs"]}
+    assert "weight" in kinds
+    assert "e1rm" in kinds
+
+
+async def test_prs_endpoint_returns_persisted_records(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+    )
+
+    resp = await client.get("/api/sessions/prs", params={"exercise_id": str(ex.id)})
+    assert resp.status_code == 200
+    records = resp.json()
+    by_kind = {r["kind"]: r for r in records}
+    assert set(by_kind) == {"weight", "e1rm", "reps_at_weight", "volume"}
+    assert by_kind["weight"]["value"] == 100.0
+    assert by_kind["volume"]["value"] == 500.0
+    assert by_kind["reps_at_weight"]["at_weight_kg"] == 100.0
+    for r in records:
+        assert r["exercise_id"] == str(ex.id)
+
+
+async def test_prs_endpoint_is_per_user(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"exercise_id": str(ex.id), "weight_kg": 150, "reps": 5},
+    )
+
+    # Bob has logged nothing → no PRs for the same Exercise.
+    client.set_user(bob)
+    resp = await client.get("/api/sessions/prs", params={"exercise_id": str(ex.id)})
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_progressive_overload_sequence_pr_dimensions(client, db_session) -> None:
+    # A realistic ramp: each genuinely-better set fires exactly the right PRs.
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+
+    async def log(w, r):
+        return (
+            await client.post(
+                f"/api/sessions/{sid}/sets",
+                json={"exercise_id": str(ex.id), "weight_kg": w, "reps": r},
+            )
+        ).json()
+
+    # 1) First ever 100×5 → all four.
+    assert {p["kind"] for p in (await log(100, 5))["prs"]} == {
+        "weight", "e1rm", "reps_at_weight", "volume"
+    }
+    # 2) 100×6: same weight, more reps@100 → reps + e1rm + volume (not weight).
+    assert {p["kind"] for p in (await log(100, 6))["prs"]} == {
+        "reps_at_weight", "e1rm", "volume"
+    }
+    # 3) 105×3 (new heavier weight, first at 105): weight + reps@105.
+    #    e1RM 105*(1+2/30)=112 < 100×6 e1RM 116.67 → no e1rm; volume 315 < 600 → no.
+    assert {p["kind"] for p in (await log(105, 3))["prs"]} == {
+        "weight", "reps_at_weight"
+    }

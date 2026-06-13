@@ -8,6 +8,7 @@ from app.models.workout_route_point import WorkoutRoutePoint
 from app.models.activity_summary import ActivitySummary
 from app.models.exercise import Exercise, ExerciseMuscle, Muscle, MuscleRole
 from app.models.training_session import SetType, TrainingSession, TrainingSet
+from app.models.personal_record import PersonalRecord
 
 __all__ = [
     "User",
@@ -25,4 +26,5 @@ __all__ = [
     "SetType",
     "TrainingSession",
     "TrainingSet",
+    "PersonalRecord",
 ]

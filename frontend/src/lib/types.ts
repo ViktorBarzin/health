@@ -168,3 +168,24 @@ export interface SetUpdate {
   effort_rir?: number | null;
   set_type?: SetType;
 }
+
+/** A personal record a written Set achieved (see lib/pr.ts `PRKind`). */
+export interface PRReadout {
+  kind: 'weight' | 'e1rm' | 'reps_at_weight' | 'volume';
+  value: number;
+  at_weight_kg: number | null;
+}
+
+/** The add/edit-Set response: the Set plus any PRs it set (server-authoritative). */
+export interface SetWriteResult extends TrainingSet {
+  prs: PRReadout[];
+}
+
+/** A persisted personal record row, from GET /api/sessions/prs. */
+export interface PersonalRecord {
+  exercise_id: string;
+  kind: 'weight' | 'e1rm' | 'reps_at_weight' | 'volume';
+  value: number;
+  at_weight_kg: number | null;
+  achieved_at: string;
+}

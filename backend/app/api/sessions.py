@@ -23,9 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.exercise import Exercise
+from app.models.personal_record import PersonalRecord
 from app.models.training_session import TrainingSession, TrainingSet
 from app.models.user import User
 from app.schemas.sessions import (
+    PersonalRecordRead,
+    PRReadout,
     SessionCreate,
     SessionDetail,
     SessionSummary,
@@ -33,8 +36,10 @@ from app.schemas.sessions import (
     SetRead,
     SetReorder,
     SetUpdate,
+    SetWriteResult,
 )
 from app.services.effort import rir_to_rpe
+from app.services.pr_service import detect_and_persist_prs
 from app.services.volume import session_volume
 
 router = APIRouter()
@@ -143,6 +148,33 @@ async def list_sessions(
     return [_summary(s) for s in sessions]
 
 
+@router.get("/prs", response_model=list[PersonalRecordRead])
+async def list_personal_records(
+    exercise_id: uuid.UUID = Query(
+        description="Return the caller's PRs for this Exercise."
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[PersonalRecordRead]:
+    """List the caller's authoritative PRs for one Exercise.
+
+    The queryable record-of-truth (one row per dimension, plus one per weight for
+    the reps-at-weight kind). Static ``/prs`` is declared before ``/{session_id}``
+    so it is not captured by the UUID path param.
+    """
+    rows = (
+        await db.execute(
+            select(PersonalRecord)
+            .where(
+                PersonalRecord.user_id == user.id,
+                PersonalRecord.exercise_id == exercise_id,
+            )
+            .order_by(PersonalRecord.kind, PersonalRecord.weight_bucket)
+        )
+    ).scalars().all()
+    return [PersonalRecordRead.model_validate(r) for r in rows]
+
+
 @router.get("/{session_id}", response_model=SessionDetail)
 async def get_session(
     session_id: uuid.UUID,
@@ -181,9 +213,19 @@ async def delete_session(
     await db.flush()
 
 
+def _write_result(training_set: TrainingSet, prs: list) -> SetWriteResult:
+    """Build the add/edit response: the Set plus any PRs the write achieved."""
+    result = SetWriteResult.model_validate(training_set)
+    result.prs = [
+        PRReadout(kind=p.kind, value=p.value, at_weight_kg=p.at_weight_kg)
+        for p in prs
+    ]
+    return result
+
+
 @router.post(
     "/{session_id}/sets",
-    response_model=SetRead,
+    response_model=SetWriteResult,
     status_code=status.HTTP_201_CREATED,
 )
 async def add_set(
@@ -191,11 +233,15 @@ async def add_set(
     payload: SetCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> SetRead:
-    """Append a Set to one of the caller's Sessions.
+) -> SetWriteResult:
+    """Append a Set to one of the caller's Sessions, detecting any PRs.
 
     The new Set takes the next ``order_index`` (current max + 1, or 0 for the
-    first). Effort RIR is stored as its RPE-equivalent.
+    first). Effort RIR is stored as its RPE-equivalent. After the Set lands, the
+    server runs authoritative PR detection (:mod:`app.services.pr_service`) and
+    returns any records beaten in ``prs`` so the UI can celebrate; the offline
+    client celebrates immediately from its own mirror of the same algorithm and
+    this reconciles it.
     """
     session = await _get_owned_session(db, session_id, user)
     await _assert_exercise_visible(db, payload.exercise_id, user)
@@ -214,8 +260,9 @@ async def add_set(
     )
     db.add(new_set)
     await db.flush()
+    prs = await detect_and_persist_prs(db, new_set)
     await db.refresh(new_set, attribute_names=["exercise"])
-    return SetRead.model_validate(new_set)
+    return _write_result(new_set, prs)
 
 
 async def _get_owned_set(
@@ -239,19 +286,22 @@ async def _get_owned_set(
     return training_set
 
 
-@router.patch("/{session_id}/sets/{set_id}", response_model=SetRead)
+@router.patch("/{session_id}/sets/{set_id}", response_model=SetWriteResult)
 async def update_set(
     session_id: uuid.UUID,
     set_id: uuid.UUID,
     payload: SetUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> SetRead:
-    """Edit a Set's weight, reps, Effort, and/or set type.
+) -> SetWriteResult:
+    """Edit a Set's weight, reps, Effort, and/or set type, re-detecting PRs.
 
     Only fields present in the request body change. ``effort_rir`` is treated
     explicitly: sending it (even ``null``) rewrites the stored RPE; omitting it
-    leaves Effort untouched.
+    leaves Effort untouched. Because an edit can turn a Set into a PR (e.g.
+    correcting a weight upward, or flipping a warmup to normal), the same
+    authoritative detection runs after the edit and any records are returned in
+    ``prs``.
     """
     training_set = await _get_owned_set(db, session_id, set_id, user)
     fields = payload.model_dump(exclude_unset=True)
@@ -266,8 +316,9 @@ async def update_set(
         training_set.rpe = rir_to_rpe(fields["effort_rir"])
 
     await db.flush()
+    prs = await detect_and_persist_prs(db, training_set)
     await db.refresh(training_set, attribute_names=["exercise"])
-    return SetRead.model_validate(training_set)
+    return _write_result(training_set, prs)
 
 
 @router.delete(

@@ -4,13 +4,21 @@
   import { api, ApiError } from '$lib/api';
   import EffortChips from '$lib/components/sessions/EffortChips.svelte';
   import ExercisePicker from '$lib/components/sessions/ExercisePicker.svelte';
+  import PRCelebration from '$lib/components/sessions/PRCelebration.svelte';
   import SetTypeChip from '$lib/components/sessions/SetTypeChip.svelte';
+  import {
+    detectPrs,
+    priorBestsFromSets,
+    type PRResult,
+  } from '$lib/pr';
   import type {
     ExerciseSummary,
+    PRReadout,
     SessionDetail,
     SetCreate,
     SetType,
     SetUpdate,
+    SetWriteResult,
     TrainingSet,
   } from '$lib/types';
   import { formatNumber } from '$lib/utils/format';
@@ -26,11 +34,63 @@
   let notFound = $state(false);
   let pickerOpen = $state(false);
   let finishing = $state(false);
+  // The PRs currently being celebrated (CONTEXT.md "PR"). Client-side detection
+  // fills this instantly when a Set is logged — offline included — then the
+  // server's authoritative result reconciles it on the response.
+  let celebratedPrs = $state<PRResult[]>([]);
 
   $effect(() => {
     const _id = sessionId;
     load();
   });
+
+  // --- PR detection (client-side first, server-authoritative on sync). ---
+
+  /**
+   * Detect PRs for a candidate Set against the user's history KNOWN TO THE
+   * CLIENT — the other Sets of the same Exercise already in this Session. This
+   * runs with no network so a PR celebrates instantly while offline. It is a
+   * conservative subset: PRs spanning earlier Sessions are caught by the server
+   * and arrive via {@link reconcileServerPrs}.
+   */
+  function detectClientSide(
+    exerciseId: string,
+    weightKg: number,
+    reps: number,
+    setType: SetType,
+    rir: number | null,
+    excludeSetId?: string,
+  ): PRResult[] {
+    const history = (session?.sets ?? [])
+      .filter(
+        (s) =>
+          s.exercise_id === exerciseId &&
+          s.set_type === 'normal' &&
+          s.id !== excludeSetId,
+      )
+      .map((s) => ({ weightKg: s.weight_kg, reps: s.reps, rir: s.effort_rir }));
+    return detectPrs({
+      weightKg,
+      reps,
+      setType,
+      rir,
+      prior: priorBestsFromSets(history),
+    });
+  }
+
+  /** Map the server's authoritative PR readouts to the celebration shape. */
+  function reconcileServerPrs(prs: PRReadout[]): PRResult[] {
+    return prs.map((p) => ({
+      kind: p.kind,
+      value: p.value,
+      atWeightKg: p.at_weight_kg,
+    }));
+  }
+
+  function celebrate(prs: PRResult[]) {
+    // Replace (don't append) so the banner always reflects the latest write.
+    celebratedPrs = prs;
+  }
 
   async function load() {
     loading = true;
@@ -96,8 +156,23 @@
 
   async function addSet(payload: SetCreate) {
     if (!session) return;
+    // Detect PRs client-side FIRST (instant, offline-capable) against the sets
+    // already known. Celebrate immediately; the server reconciles below.
+    const clientPrs = detectClientSide(
+      payload.exercise_id,
+      payload.weight_kg,
+      payload.reps,
+      payload.set_type ?? 'normal',
+      payload.effort_rir ?? null,
+    );
+    if (clientPrs.length > 0) celebrate(clientPrs);
     try {
-      await api.post(`/api/sessions/${session.id}/sets`, payload);
+      const result = await api.post<SetWriteResult>(
+        `/api/sessions/${session.id}/sets`,
+        payload,
+      );
+      // Server is authoritative (full history, no false PRs): use its verdict.
+      celebrate(reconcileServerPrs(result.prs));
       await load();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to add set';
@@ -120,7 +195,12 @@
       setId,
       setTimeout(async () => {
         try {
-          await api.patch(`/api/sessions/${session!.id}/sets/${setId}`, body);
+          const result = await api.patch<SetWriteResult>(
+            `/api/sessions/${session!.id}/sets/${setId}`,
+            body,
+          );
+          // Editing weight/reps up can mint a PR — celebrate the server verdict.
+          celebrate(reconcileServerPrs(result.prs));
           await load();
         } catch (err) {
           error = err instanceof Error ? err.message : 'Failed to update set';
@@ -133,7 +213,12 @@
   async function patchSetNow(setId: string, body: SetUpdate) {
     if (!session) return;
     try {
-      await api.patch(`/api/sessions/${session.id}/sets/${setId}`, body);
+      const result = await api.patch<SetWriteResult>(
+        `/api/sessions/${session.id}/sets/${setId}`,
+        body,
+      );
+      // e.g. flipping a warmup → normal can reveal a PR; celebrate the verdict.
+      celebrate(reconcileServerPrs(result.prs));
       await load();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to update set';
@@ -390,3 +475,5 @@
 {/if}
 
 <ExercisePicker open={pickerOpen} onpick={addExercise} onclose={() => (pickerOpen = false)} />
+
+<PRCelebration prs={celebratedPrs} onclose={() => (celebratedPrs = [])} />
