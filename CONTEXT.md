@@ -19,8 +19,18 @@ the user logs.
 _Avoid_: activity, exercise session
 
 **Set**:
-One performed set within a Session: an Exercise, weight × reps, optional Effort.
-Warmup flags exist on imported history but are not part of the live logging flow.
+One performed set within a Session: an Exercise, weight × reps, optional Effort, and a
+set type — normal, warmup, drop, or failure. Non-normal types are excluded from volume and
+PR statistics by default.
+
+**Superset**:
+Two or more Exercises within a Session logged in alternation as a group; may be emitted by
+a Recommendation for time-constrained sessions.
+
+**PR**:
+A user's personal record for an Exercise — best weight, reps-at-weight, estimated 1RM, or
+volume; detected live as a Set is logged (offline included) and celebrated in the UI.
+_Avoid_: personal best, record (unqualified)
 
 **Effort**:
 A one-tap reps-in-reserve rating on a Set (0 / 1 / 2 / 3 / 4+ — "how many more reps were
@@ -149,3 +159,6 @@ samples.
 - "plan" was cut, then reopened the same evening — resolved 2026-06-12: generated
   multi-week **Programs** exist (ADR-0004); *user-authored* plans remain out. "Plan" stays
   an avoided word; say **Program** (multi-week) or **Recommendation** (today).
+- The rest-timer and warmup-flag cuts were reversed 2026-06-13 on competitive evidence
+  (see docs/research/); the per-set-notes cut was vindicated by the same research, and the
+  user-authored-plans cut was reaffirmed.

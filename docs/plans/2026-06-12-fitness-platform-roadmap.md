@@ -32,12 +32,18 @@ Foundations folded in only where M1 needs them:
 3. **Catch-up Import**: one fresh export.zip per user through the existing upload path
    closes the Feb→now gap (dedup makes it safe).
 4. **Exercise library**: seed global shared table from free-exercise-db (~870 exercises,
-   muscle mappings, images); per-user custom Exercises.
+   muscle mappings, images); per-user custom Exercises; per-Exercise demo-video deep-links
+   (no hosted video content).
 5. **Fitbod importer**: CSV → Sessions/Sets (preserve warmup flags), exercise-name mapping
    onto the library with a manual-match UI for stragglers.
-6. **Session logging UX**: phone-first logging — weight × reps + optional Effort (one-tap
-   reps-in-reserve chips 0–4+, last-set nudge, never blocking); Gym Profile (equipment)
-   management.
+6. **Session logging UX** (offline-first — ADR-0005): phone-first logging — weight × reps
+   + optional Effort (one-tap reps-in-reserve chips 0–4+, last-set nudge, never blocking);
+   set-type chips (warmup/drop/failure, excluded from stats by default); supersets with
+   auto-advance; rest timer (per-exercise defaults, sound/vibration); plate + warm-up
+   calculators from the Gym Profile's plates; screen wake-lock; PR detection with live
+   celebration (client-side, works offline); Gym Profile (equipment) management.
+   (Rest timer + warmup flags: 2026-06-12 cuts reversed 2026-06-13 on competitive
+   evidence — docs/research/2026-06-13-gym-app-competitive-research.md.)
 7. **Engine** (ADR-0002): per-muscle Recovery scores from Set history, per-exercise
    Progression targets, equipment-aware generator producing a Recommendation per visit;
    claude-agent-service layer for conversational adjustment (proposes, never decides).
@@ -51,6 +57,9 @@ Foundations folded in only where M1 needs them:
    parameter tappable to its Principle and studies.
 10. **Workout↔Session auto-linking** by time overlap (watch recording enriches the logged
     Session).
+11. **Training analytics**: per-muscle weekly volume + Recovery heatmap (SVG body map —
+    the one view all three verified competitor apps share), per-exercise e1RM trend
+    charts; both are display layers over data the engine already computes.
 
 Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes Fitbod.
 
@@ -76,7 +85,13 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 ## Deliberate non-goals
 
 - User-authored workout plans/templates (ADR-0002/ADR-0004 — Programs and visits are
-  always generated).
+  always generated). Reaffirmed 2026-06-13 after competitive research surfaced Boostcamp's
+  12K+ community-program moat — the app builds the plans.
+- Strava push (our Sessions → Strava) — rejected 2026-06-13; Strava remains a mirror of
+  the watch, not of us.
+- Watch companion / HealthKit write-back — structurally impossible for a PWA; mitigated by
+  sub-3-tap offline logging + screen wake-lock.
+- Hosted exercise demo videos — deep-links only (content licensing isn't our business).
 - Strava/Garmin/Withings connectors; Health Auto Export or any third-party sync app.
 - Sharing/social features: accounts are fully isolated; only the Exercise library and Food
   catalog are shared. (Revisit on real demand.)
