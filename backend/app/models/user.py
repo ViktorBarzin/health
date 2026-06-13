@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
@@ -14,10 +14,3 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-
-    credentials: Mapped[list["UserCredential"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-
-
-from app.models.user_credential import UserCredential  # noqa: E402

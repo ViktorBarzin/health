@@ -1,7 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { auth } from '$lib/stores/auth.svelte';
-  import { goto } from '$app/navigation';
   import type { ImportStatus as ImportStatusType } from '$lib/types';
   import { formatDate } from '$lib/utils/format';
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
@@ -10,7 +9,6 @@
   let imports = $state<ImportStatusType[]>([]);
   let activeBatchId = $state<string | undefined>(undefined);
   let loadingImports = $state(true);
-  let loggingOut = $state(false);
 
   $effect(() => {
     loadImports();
@@ -30,12 +28,6 @@
 
   function handleUploadComplete(batchId: string) {
     activeBatchId = batchId;
-  }
-
-  async function handleLogout() {
-    loggingOut = true;
-    await auth.logout();
-    goto('/login');
   }
 </script>
 
@@ -108,26 +100,6 @@
             {auth.user?.created_at ? formatDate(auth.user.created_at, 'long') : '--'}
           </p>
         </div>
-      </div>
-
-      <!-- Logout -->
-      <div class="px-6 py-4">
-        <button
-          onclick={handleLogout}
-          disabled={loggingOut}
-          class="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30
-                 text-red-400 text-sm font-medium rounded-lg transition-colors
-                 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {#if loggingOut}
-            <span class="flex items-center gap-2">
-              <div class="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin"></div>
-              Signing out...
-            </span>
-          {:else}
-            Sign Out
-          {/if}
-        </button>
       </div>
     </div>
   </section>

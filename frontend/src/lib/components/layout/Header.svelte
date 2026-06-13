@@ -18,11 +18,6 @@
   function closeUserMenu() {
     userMenuOpen = false;
   }
-
-  async function handleLogout() {
-    closeUserMenu();
-    await auth.logout();
-  }
 </script>
 
 <header class="bg-surface-900 border-b border-surface-700 px-4 lg:px-6 py-3">
@@ -68,7 +63,7 @@
         <div class="absolute right-0 mt-2 w-48 bg-surface-800 rounded-lg shadow-lg border border-surface-700 py-1 z-50">
           <div class="px-4 py-2 border-b border-surface-700">
             <p class="text-sm text-surface-200 truncate">{auth.user?.email}</p>
-            <p class="text-xs text-surface-500">Logged in</p>
+            <p class="text-xs text-surface-500">Signed in</p>
           </div>
           <a
             href="/settings"
@@ -77,12 +72,6 @@
           >
             Settings
           </a>
-          <button
-            class="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-surface-700 transition-colors"
-            onclick={handleLogout}
-          >
-            Log out
-          </button>
         </div>
       {/if}
     </div>

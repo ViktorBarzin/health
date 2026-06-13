@@ -1,23 +1,8 @@
-"""Pydantic schemas for authentication requests and responses."""
+"""Pydantic schemas for authentication responses."""
 
 from datetime import datetime
-from typing import Any
 
-from pydantic import BaseModel, EmailStr
-
-
-class EmailRequest(BaseModel):
-    email: EmailStr
-
-
-class RegisterCompleteRequest(BaseModel):
-    email: EmailStr
-    credential: dict[str, Any]
-
-
-class LoginCompleteRequest(BaseModel):
-    challenge_id: str
-    credential: dict[str, Any]
+from pydantic import BaseModel
 
 
 class UserResponse(BaseModel):

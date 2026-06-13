@@ -13,7 +13,9 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://health:${DB_PASSWORD}@db:5432/apple_health
-      SECRET_KEY: ${SECRET_KEY}
+      # No Authentik in front locally: act as this identity (ADR-0003). Override
+      # in .env. In production this is unset and only X-authentik-email is trusted.
+      DEV_AUTH_EMAIL: ${DEV_AUTH_EMAIL:-dev@localhost}
       UPLOAD_DIR: /data/uploads
     volumes:
       - uploads:/data/uploads

@@ -7,7 +7,7 @@
 ## Overview
 
 Full-stack Apple Health data dashboard: FastAPI backend, SvelteKit frontend, Postgres,
-WebAuthn auth (being replaced by Authentik identity — ADR-0003). Imports Apple Health
+Authentik forward-auth identity (ADR-0003; in-app WebAuthn retired). Imports Apple Health
 XML/ZIP exports and provides interactive visualizations.
 
 ## Architecture
@@ -37,16 +37,17 @@ Database: `postgresql+asyncpg://health:<DB_PASSWORD>@db:5432/apple_health`
 backend/app/
 ├── api/           # Route handlers
 │   ├── router.py  # Aggregates all sub-routers
-│   ├── auth.py    # /api/auth — WebAuthn register/login/logout/me
+│   ├── auth.py    # /api/auth — /me (returns the forward-auth user)
 │   ├── dashboard.py  # /api/dashboard — summary endpoint
 │   ├── metrics.py    # /api/metrics — available metrics + time-series queries
 │   ├── workouts.py   # /api/workouts — list/detail with route points
 │   ├── activity.py   # /api/activity — activity rings
 │   └── ingestion.py  # /api/import — upload/status/cancel/delete
 ├── core/
-│   ├── auth.py         # Session management (in-memory dict)
-│   ├── dependencies.py # get_current_user (session cookie)
+│   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
+├── migrations_support/ # Logic invoked by Alembic migrations + unit-tested directly
+│   └── user_reconciliation.py  # Idempotent prod-user → Authentik-email reconcile
 ├── models/        # SQLAlchemy ORM (see DB Models below)
 ├── schemas/       # Pydantic request/response models
 ├── services/
@@ -67,7 +68,6 @@ backend/app/
 | `workout_route_points` | (time, workout_id) | (workout_id) |
 | `activity_summaries` | (date, user_id) | — |
 | `users` | id | UNIQUE(email) |
-| `user_credentials` | id (UUID) | UNIQUE(credential_id) |
 | `data_sources` | id | UNIQUE(name, bundle_id) |
 | `import_batches` | id (UUID) | — |
 
@@ -102,9 +102,8 @@ frontend/src/
 ├── lib/
 │   ├── api.ts          # API client (fetch with credentials: include)
 │   ├── types.ts        # TypeScript interfaces
-│   ├── webauthn.ts     # WebAuthn helpers
 │   ├── stores/
-│   │   ├── auth.svelte.ts      # User session state
+│   │   ├── auth.svelte.ts      # Current user from /api/auth/me (forward-auth)
 │   │   └── date-range.svelte.ts # Global date range + resolution
 │   ├── components/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
@@ -114,8 +113,6 @@ frontend/src/
 │   └── utils/          # constants.ts, format.ts
 └── routes/
     ├── +page.svelte           # Dashboard (home)
-    ├── login/+page.svelte     # WebAuthn login
-    ├── register/+page.svelte  # WebAuthn registration
     ├── workouts/+page.svelte  # Workout list
     ├── workouts/[id]/+page.svelte  # Workout detail + map
     ├── metrics/+page.svelte   # Available metrics
@@ -128,14 +125,20 @@ frontend/src/
 
 ## Auth
 
-WebAuthn passkeys (discoverable credentials). No passwords.
-- Sessions: in-memory dict, HTTP-only cookie named `session`, 30-day expiry
-- RP ID: `localhost`, Origin: `http://localhost:3000`
-- All API endpoints except `/api/health` and `/api/auth/*` require auth
+Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
+- The ingress runs `auth="required"`; every request arrives with a trusted
+  `X-authentik-email` header (forward-auth overwrites any client-supplied
+  `X-authentik-*`, so it cannot be spoofed behind the ingress).
+- `get_current_user` reads that header (fallback `DEV_AUTH_EMAIL` for local dev),
+  then gets-or-creates the `User` by email and returns it.
+- Local dev (docker-compose, no Authentik): set `DEV_AUTH_EMAIL` to act as that
+  identity. A request with neither header nor override → 401.
+- All API endpoints except `/api/health` require auth; `/api/auth/me` returns
+  the resolved user.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `e6f0a4b8c3d5`.
+Alembic migrations in `backend/alembic/versions/`. Current head: `b8c2d4e6f0a1`.
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
@@ -148,8 +151,9 @@ Woodpecker CI (`.woodpecker/default.yml`):
 ## Environment Variables
 
 ```
-DB_PASSWORD=...       # PostgreSQL password
-SECRET_KEY=...        # Session signing key
+DB_PASSWORD=...        # PostgreSQL password
+DEV_AUTH_EMAIL=...     # Local dev only: identity used when no X-authentik-email
+                       # header is present. MUST be unset in production.
 ```
 
 Set in `.env` file, loaded by docker-compose.
@@ -158,6 +162,6 @@ Set in `.env` file, loaded by docker-compose.
 
 - **Backend**: Python 3.12, async everywhere, SQLAlchemy 2.0 style (mapped_column)
 - **Frontend**: SvelteKit with Svelte 5 runes (`$state`, `$derived`, `$effect`, `$props`)
-- **API**: All routes under `/api/`, JSON responses, session cookie auth
+- **API**: All routes under `/api/`, JSON responses, forward-auth identity (ADR-0003)
 - **DB**: Composite PKs for time-series tables, UUID PKs for entity tables
 - **Imports**: Always use `from_attributes=True` in Pydantic model_config for ORM compatibility
