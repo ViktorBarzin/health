@@ -12,8 +12,13 @@ Principles KB — added same evening). Vocabulary: `CONTEXT.md`.
 
 - Live app at health.viktorbarzin.me; DB `health` on the shared CNPG cluster; 3 users,
   6.6M metric samples, 1,105 workouts — **stale since 2026-02-12** (manual exports died).
-- All household data flows through Apple Health: watch (HR/HRV/sleep/workouts/VO2max) and
-  smart scale (weight/body comp) both write to HealthKit. Strava is a mirror — no connector.
+- Household devices: Viktor on iPhone + Apple Watch + a smart scale, all writing to Apple
+  Health (HR/HRV/sleep/workouts/VO2max + weight/body comp). **Anca now wears a Whoop band**
+  (she has legacy Apple Health from her old iPhone, already in the DB). Strava is a mirror
+  of the watch — not a connector we build.
+- Integrations are first-class and extensible, not export.zip-only (reversed 2026-06-13 —
+  ADR-0006). Apple Health (push receiver) + Whoop (official API) are the household's two
+  Connectors; the framework makes future ones one module each.
 - Fitbod CSV export is the ONLY source of set-level strength history (Apple Health has
   Fitbod sessions only as opaque workouts).
 - Priority order (Viktor): workout generation → health insights → nutrition. Fitbod is
@@ -65,12 +70,21 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 
 ## M2 — Health (continuous data + insights)
 
-1. **One-tap ingest**: per-user API token + bearer ingest route excluded from forward-auth
-   (ADR-0003); iOS share-sheet Shortcut so the flow is Health-app-export → Share → done.
-   Import remains idempotent; make "only what's missing" fast and report it.
-2. **Readiness & insights**: daily Readiness from HRV/resting-HR/sleep trends; correlation
+1. **Connector framework** (ADR-0006): `SourceConnector` ABC + per-user opt-in UI +
+   per-user credential storage + a K8s CronJob scheduler + webhook receiver. The bearer
+   ingest route (ADR-0003) doubles as the documented third-party push API. One idempotent,
+   normalizing ingest path for all Connector kinds.
+2. **Apple Health Connector**: free iOS Shortcut posting to the ingest receiver (one-tap,
+   no payment); Health Auto Export app supported as an optional paid client of the same
+   endpoint; export.zip upload stays as backfill. Best-effort/idempotent (HealthKit locked
+   off when phone locked). Carries HRV/RHR/sleep for Readiness.
+3. **Whoop Connector**: scheduled puller on the official OAuth2 v2 API + webhooks — Anca's
+   recovery path (HRV, RHR, sleep stages, recovery score). Build on v2 (v1 webhooks gone).
+4. **Full data Export** (ADR-0006): one-tap per-user JSON+CSV archive of all Sessions,
+   Sets, Workouts, Metrics, Diary Entries.
+5. **Readiness & insights**: daily Readiness from HRV/resting-HR/sleep trends; correlation
    views (training volume vs sleep, calories vs weight trend) on the existing chart library.
-3. Dashboard refresh on the data already ingested (weight incl. scale body-comp, sleep,
+6. Dashboard refresh on the data already ingested (weight incl. scale body-comp, sleep,
    activity).
 
 ## M3 — Nutrition (the MyFitnessPal exit)
@@ -92,7 +106,11 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 - Watch companion / HealthKit write-back — structurally impossible for a PWA; mitigated by
   sub-3-tap offline logging + screen wake-lock.
 - Hosted exercise demo videos — deep-links only (content licensing isn't our business).
-- Strava/Garmin/Withings connectors; Health Auto Export or any third-party sync app.
+- Read-API tokens, per-workout GPX/TCX/FIT export, outbound webhooks — deferred; full
+  JSON+CSV Export ships in M2, the rest layer onto the same event model later (ADR-0006).
+- Health Connect / Garmin / Fitbit / Withings / Oura connectors — deferred to M3+ and
+  built per-module when a user with that device appears (ADR-0006); Apple + Whoop cover the
+  household. Aggregator APIs (Terra et al.) are out — enterprise-priced.
 - Sharing/social features: accounts are fully isolated; only the Exercise library and Food
   catalog are shared. (Revisit on real demand.)
 - Staleness nudges, weekly LLM digest, weight forecasting (cut in the extras round).
@@ -103,6 +121,14 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 
 ## Open items for implementation sessions
 
+- Whoop Connector at M2 build time: re-verify v2 API scopes, webhook payloads, rate
+  limits, and token-refresh against developer.whoop.com (it moves fast).
+- Apple Connector: settle the free-Shortcut health-sample coverage (does it carry HRV/SDNN
+  and sleep stages, or is export.zip still needed for those?) and the ingest JSON schema.
+- Connector research follow-up before building beyond Apple+Whoop: Strava post-2024 terms,
+  Withings/Oura/Polar official APIs, nutrition exports (MFP/Cronometer/MacroFactor),
+  FIT/GPX library maturity (docs/research/2026-06-13-integration-landscape.md "not yet
+  verified").
 - Recovery model details (muscle-group fatigue decay curves) — research at M1 build time.
 - Progression mechanics at engine-build time: RIR→RPE mapping, effort-adjusted e1RM
   formula choice (Epley/Brzycki family), load-increment and back-off thresholds — all as

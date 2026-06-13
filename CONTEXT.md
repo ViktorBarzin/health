@@ -1,8 +1,8 @@
 # Health
 
-Self-hosted multi-user fitness platform: continuously ingests each user's health data
-(Apple Health, scale, Strava), tracks gym training and nutrition, and recommends workouts —
-replacing Fitbod and MyFitnessPal.
+Self-hosted multi-user fitness platform: ingests each user's health data through opt-in
+Connectors (Apple Health, Whoop, and more), tracks gym training and nutrition, recommends
+workouts, and exports everything back out — replacing Fitbod and MyFitnessPal.
 
 ## Language
 
@@ -109,25 +109,40 @@ both the active Program and the Budget.
 
 ### Ingestion
 
+**Connector**:
+A per-user, opt-in integration that brings an external platform's data in. Each Connector
+is one of three kinds — a **push receiver** (an external client posts to our ingest API:
+the free iOS Shortcut or the optional Health Auto Export app), a **scheduled puller** (a
+job polls a remote API on a cadence: Whoop, Garmin), or an **archive Import** (a
+user-supplied file). All Connectors normalize into the same idempotent ingest path.
+_Avoid_: integration, sync, plugin
+
 **Import**:
-One idempotent ingestion run of a user-supplied archive (Apple Health export.zip, Fitbod
-CSV). Re-running an Import never duplicates data.
+One idempotent ingestion run, whether from an uploaded archive (Apple Health export.zip,
+Fitbod CSV) or a Connector batch. Re-running an Import never duplicates data.
 _Avoid_: sync, upload (the upload is the act; the Import is the run)
 
 **Source**:
-The device or app that originally produced a record (Apple Watch, iPhone, Fitbod, smart
-scale, Strava).
+The device or app that originally produced a record (Apple Watch, Whoop, iPhone, Fitbod,
+smart scale).
 
 **Metric**:
 A typed per-user health time series (heart rate, body mass, HRV, …) made of timestamped
 samples.
+
+**Export**:
+A user's full personal archive — every Session, Set, Workout, Metric, and Diary Entry — as
+downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.
 
 ## Relationships
 
 - A **Session** contains one or more **Sets**; each **Set** references exactly one **Exercise**
 - A **Workout** covering the same physical event as a **Session** is auto-linked to it by
   time overlap; the UI presents the linked pair as one enriched Session
-- An **Import** produces **Workouts** and **Metric** samples, each attributed to a **Source**
+- A **Connector** is enabled per user and feeds **Imports**; an **Import** produces
+  **Workouts** and **Metric** samples, each attributed to a **Source**
+- Every user can **Export** their own data; the **Export** is the read-side mirror of the
+  ingest API that push **Connectors** write to
 - A **Goal** drives both the active **Program** and the **Budget** — one object across
   training and nutrition (ADR-0004)
 - A **Program** is generated from **Principles**; the daily **Recommendation** is drawn
@@ -162,3 +177,6 @@ samples.
 - The rest-timer and warmup-flag cuts were reversed 2026-06-13 on competitive evidence
   (see docs/research/); the per-set-notes cut was vindicated by the same research, and the
   user-authored-plans cut was reaffirmed.
+- "no connectors — everything rides export.zip, Strava is a pure mirror" (2026-06-12) was
+  reversed 2026-06-13: opt-in **Connectors** are now a first-class, extensible part of the
+  platform (ADR-0006). Apple export.zip remains one Connector among several.
