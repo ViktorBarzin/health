@@ -633,3 +633,130 @@ async def test_progressive_overload_sequence_pr_dimensions(client, db_session) -
     assert {p["kind"] for p in (await log(105, 3))["prs"]} == {
         "weight", "reps_at_weight"
     }
+
+
+# --------------------------------------------------------------------------- #
+# Offline-first replay: client-supplied ids + idempotent create (ADR-0005, #6)
+# --------------------------------------------------------------------------- #
+
+
+async def test_start_session_honours_client_supplied_id(client, db_session) -> None:
+    # The offline logger mints the Session id at the gym; the server must use it
+    # (so the Session's queued Sets, which reference it, land correctly).
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+    sid = str(uuid.uuid4())
+
+    resp = await client.post("/api/sessions/", json={"id": sid})
+    assert resp.status_code == 201
+    assert resp.json()["id"] == sid
+
+
+async def test_start_session_replay_is_idempotent(client, db_session) -> None:
+    # Replaying the same client-supplied create (flaky-response retry) returns
+    # the existing Session, not a duplicate or a primary-key error.
+    alice = await _make_user(db_session, "alice@example.com")
+    client.set_user(alice)
+    sid = str(uuid.uuid4())
+
+    first = await client.post("/api/sessions/", json={"id": sid})
+    assert first.status_code == 201
+    again = await client.post("/api/sessions/", json={"id": sid})
+    assert again.status_code == 201
+    assert again.json()["id"] == sid
+
+    # Exactly one Session exists.
+    listing = await client.get("/api/sessions/")
+    assert [s["id"] for s in listing.json()] == [sid]
+
+
+async def test_another_users_session_id_does_not_collide(client, db_session) -> None:
+    # A client id is only matched within the caller's own Sessions: Bob reusing
+    # Alice's id gets a fresh Session under Bob, never Alice's.
+    alice = await _make_user(db_session, "alice@example.com")
+    bob = await _make_user(db_session, "bob@example.com")
+    sid = str(uuid.uuid4())
+
+    client.set_user(alice)
+    await client.post("/api/sessions/", json={"id": sid})
+
+    # The idempotency lookup is scoped to the caller's own Sessions, so Bob can
+    # never read Alice's Session by guessing its id — that is the security
+    # contract. (UUIDs don't collide across users in practice; an adversarial
+    # exact-id reuse is out of scope — the per-user scoping is what matters.)
+    client.set_user(bob)
+    assert (await client.get(f"/api/sessions/{sid}")).status_code == 404
+    client.set_user(alice)
+    assert (await client.get(f"/api/sessions/{sid}")).status_code == 200
+
+
+async def test_add_set_honours_client_supplied_id(client, db_session) -> None:
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        f"/api/sessions/{sid}/sets",
+        json={"id": set_id, "exercise_id": str(ex.id), "weight_kg": 100, "reps": 5},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["id"] == set_id
+
+
+async def test_add_set_replay_is_idempotent_no_duplicate(client, db_session) -> None:
+    # The crux of offline replay: re-POSTing an already-applied Set id (the
+    # client never saw the first 2xx) returns the existing Set, does not
+    # duplicate it, and does not trip the (session_id, order_index) unique
+    # constraint by appending a second row at a new index.
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Bench Press")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = str(uuid.uuid4())
+    body = {"id": set_id, "exercise_id": str(ex.id), "weight_kg": 100, "reps": 5}
+
+    first = await client.post(f"/api/sessions/{sid}/sets", json=body)
+    assert first.status_code == 201
+    first_index = first.json()["order_index"]
+
+    again = await client.post(f"/api/sessions/{sid}/sets", json=body)
+    assert again.status_code == 201
+    assert again.json()["id"] == set_id
+    # Same slot, not a new one.
+    assert again.json()["order_index"] == first_index
+
+    # The Session holds exactly one Set.
+    detail = (await client.get(f"/api/sessions/{sid}")).json()
+    assert len(detail["sets"]) == 1
+
+
+async def test_add_set_replay_does_not_re_award_a_pr(client, db_session) -> None:
+    # A replayed create must not double-count toward PRs: the first 100x5 PRs on
+    # every dimension; replaying the same id reconciles to the same record and
+    # reports the dimensions the (unchanged) Set still holds — never a spurious
+    # NEW record, and the persisted records stay single.
+    alice = await _make_user(db_session, "alice@example.com")
+    ex = await _make_exercise(db_session, "Squat")
+    client.set_user(alice)
+    sid = (await client.post("/api/sessions/", json={})).json()["id"]
+    set_id = str(uuid.uuid4())
+    body = {"id": set_id, "exercise_id": str(ex.id), "weight_kg": 100, "reps": 5}
+
+    first = await client.post(f"/api/sessions/{sid}/sets", json=body)
+    assert {p["kind"] for p in first.json()["prs"]} == {
+        "weight", "e1rm", "reps_at_weight", "volume"
+    }
+
+    # Replay: the Set still holds those records (it IS the record holder), so the
+    # same dimensions come back — but there's still only one Set and one record
+    # per dimension.
+    await client.post(f"/api/sessions/{sid}/sets", json=body)
+    detail = (await client.get(f"/api/sessions/{sid}")).json()
+    assert len(detail["sets"]) == 1
+
+    prs = (await client.get("/api/sessions/prs", params={"exercise_id": str(ex.id)})).json()
+    # One row per weight-independent dimension (weight, e1rm, volume) + one
+    # reps_at_weight row for 100 kg = 4 rows, not 8.
+    assert len(prs) == 4

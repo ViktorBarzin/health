@@ -1,13 +1,14 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { api, ApiError } from '$lib/api';
+  import { api } from '$lib/api';
   import EffortChips from '$lib/components/sessions/EffortChips.svelte';
   import ExercisePicker from '$lib/components/sessions/ExercisePicker.svelte';
   import PlateCalculator from '$lib/components/sessions/PlateCalculator.svelte';
   import PRCelebration from '$lib/components/sessions/PRCelebration.svelte';
   import RestTimer from '$lib/components/sessions/RestTimer.svelte';
   import SetTypeChip from '$lib/components/sessions/SetTypeChip.svelte';
+  import SyncIndicator from '$lib/components/sessions/SyncIndicator.svelte';
   import type { GymEquipment } from '$lib/plates';
   import {
     celebratablePrs,
@@ -15,33 +16,40 @@
     priorBestsFromSets,
     type PRResult,
   } from '$lib/pr';
-  import { groupSessionSets, nextSupersetExerciseId } from '$lib/superset';
+  import { createSessionStore } from '$lib/sync/session-store.svelte';
+  import { getKV, putKV } from '$lib/sync/store';
+  import { nextGroupId, groupSessionSets, nextSupersetExerciseId } from '$lib/superset';
   import type {
     ExerciseSummary,
     GymProfile,
-    PRReadout,
     RestPref,
-    SessionDetail,
     SetCreate,
     SetType,
     SetUpdate,
-    SetWriteResult,
     TrainingSet,
   } from '$lib/types';
   import { requestWakeLock, type WakeLockHandle } from '$lib/wake-lock';
   import { formatNumber } from '$lib/utils/format';
 
-  // The live gym-logging surface. A Session is an ordered list of Sets; we render
-  // them in blocks (lib/superset.ts) — consecutive same-exercise sets share a
-  // header (Fitbod/Hevy style), and Sets in a Superset render as one alternation
-  // block. Mobile-first: big steppers, one-tap chips, a rest timer that auto-
-  // starts on each logged Set, a plate/warm-up calculator per row, and a screen
-  // wake-lock so the phone stays awake mid-Session.
-  let sessionId = $derived($page.params.id);
-  let session = $state<SessionDetail | null>(null);
-  let loading = $state(true);
+  // The live gym-logging surface — OFFLINE-FIRST (ADR-0005, #6). A Session is an
+  // ordered list of Sets; we render them in blocks (lib/superset.ts) —
+  // consecutive same-exercise sets share a header (Fitbod/Hevy style), and Sets
+  // in a Superset render as one alternation block. Mobile-first: big steppers,
+  // one-tap chips, a rest timer that auto-starts on each logged Set, a
+  // plate/warm-up calculator per row, and a screen wake-lock.
+  //
+  // Every mutation goes through an offline-capable data layer (createSessionStore):
+  // it updates the optimistic snapshot immediately and enqueues a durable op
+  // (IndexedDB) that syncs to /api/sessions when connectivity returns. The UI
+  // never waits on the network, so logging works in a gym dead zone and survives
+  // a kill/reload mid-Session.
+  let sessionId = $derived($page.params.id ?? '');
+  let store = $derived(createSessionStore(sessionId));
+  // The optimistic Session snapshot the whole template binds to (was `session`).
+  let session = $derived(store.snapshot);
+  let loading = $derived(store.loading);
+  let notFound = $derived(store.notFound);
   let error = $state('');
-  let notFound = $state(false);
   let pickerOpen = $state(false);
   let finishing = $state(false);
   let celebratedPrs = $state<PRResult[]>([]);
@@ -79,15 +87,20 @@
       : null,
   );
 
+  // Load through the offline store, then prefetch the day's context so logging
+  // works with zero signal. Re-runs when the session id changes; tears the old
+  // store's drain-listener down.
   $effect(() => {
-    const _id = sessionId;
-    load();
+    const s = store;
+    s.load().then(() => {
+      void prefetchRest();
+      void prefetchContext();
+    });
+    return () => s.destroy();
   });
 
   // Hold a wake-lock while the Session is active. Depend on a $derived BOOLEAN
-  // (not `session`, which load() reassigns on every set write) so the effect
-  // re-runs only when active-ness actually flips — otherwise we'd release and
-  // re-request the lock on every logged set.
+  // so the effect re-runs only when active-ness actually flips.
   let sessionActive = $derived(session?.is_active ?? false);
   $effect(() => {
     if (!sessionActive) return;
@@ -99,15 +112,24 @@
     };
   });
 
-  // Load the Gym Profile once (best-effort; the calculator degrades without it).
-  $effect(() => {
-    api
-      .get<GymProfile>('/api/gym-profile')
-      .then((p) => (gymProfile = p))
-      .catch(() => {});
-  });
+  // --- Prefetch the day's context (ADR-0005): cache what the logging screen
+  // needs so it works offline — the Gym Profile (plate math) and per-exercise
+  // rest. Cached in IndexedDB KV so a reload while offline still has them. ---
 
-  // --- PR detection (client-side first, server-authoritative on sync). ---
+  async function prefetchContext() {
+    // Gym Profile: try the network, fall back to the cached copy.
+    try {
+      const p = await api.get<GymProfile>('/api/gym-profile');
+      gymProfile = p;
+      await putKV('gym-profile', p);
+    } catch {
+      gymProfile = (await getKV<GymProfile>('gym-profile')) ?? null;
+    }
+  }
+
+  // --- PR detection (client-side, fires offline — ADR-0005). The server is the
+  // record-of-truth and reconciles authoritative PRs on sync (surfaced via the
+  // /prs endpoint / history), so the live banner is the instant client signal. ---
 
   function detectClientSide(
     exerciseId: string,
@@ -134,35 +156,13 @@
     });
   }
 
-  function reconcileServerPrs(prs: PRReadout[]): PRResult[] {
-    return prs.map((p) => ({
-      kind: p.kind,
-      value: p.value,
-      atWeightKg: p.at_weight_kg,
-    }));
-  }
-
   function celebrate(prs: PRResult[]) {
     celebratedPrs = celebratablePrs(prs);
   }
 
-  async function load() {
-    loading = true;
-    error = '';
-    notFound = false;
-    try {
-      session = await api.get<SessionDetail>(`/api/sessions/${sessionId}`);
-      void prefetchRest();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) notFound = true;
-      else error = err instanceof Error ? err.message : 'Failed to load session';
-    } finally {
-      loading = false;
-    }
-  }
-
   // Fetch the effective rest duration for any exercise in the Session we haven't
-  // cached yet (so the timer can start with the right value the moment a set lands).
+  // cached yet (so the timer can start with the right value the moment a set
+  // lands). Best-effort + IndexedDB-cached so it survives offline reloads.
   async function prefetchRest() {
     const ids = [...new Set((session?.sets ?? []).map((s) => s.exercise_id))];
     await Promise.all(
@@ -172,8 +172,10 @@
           try {
             const pref = await api.get<RestPref>(`/api/exercises/${id}/rest`);
             restByExercise[id] = pref.effective_rest_seconds;
+            await putKV(`rest:${id}`, pref.effective_rest_seconds);
           } catch {
-            restByExercise[id] = 120;
+            restByExercise[id] =
+              (await getKV<number>(`rest:${id}`)) ?? 120;
           }
         }),
     );
@@ -209,11 +211,14 @@
     return ids;
   });
 
-  // --- Mutations (reload-after-write keeps order_index + volume correct). ---
+  // --- Mutations (offline-first: optimistic snapshot + queued op, no reload). ---
 
   async function addExercise(ex: ExerciseSummary) {
     pickerOpen = false;
+    // Remember the picked name so the block header reads right offline (the
+    // store can't resolve a name with no signal).
     await addSet({ exercise_id: ex.id, weight_kg: 0, reps: 8 });
+    store.setExerciseName(ex.id, ex.name);
   }
 
   // "Add set" within a block copies the block's last set; for a superset it
@@ -234,6 +239,8 @@
 
   async function addSet(payload: SetCreate) {
     if (!session) return;
+    // PR detection fires instantly client-side (offline included); the server
+    // reconciles authoritative records on sync.
     const clientPrs = detectClientSide(
       payload.exercise_id,
       payload.weight_kg,
@@ -242,19 +249,10 @@
       payload.effort_rir ?? null,
     );
     if (clientPrs.length > 0) celebrate(clientPrs);
-    try {
-      const result = await api.post<SetWriteResult>(
-        `/api/sessions/${session.id}/sets`,
-        payload,
-      );
-      celebrate(reconcileServerPrs(result.prs));
-      // Auto-start the rest timer for the exercise just logged.
-      await ensureRest(payload.exercise_id);
-      startRestFor(payload.exercise_id);
-      await load();
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to add set';
-    }
+    await store.addSet(payload);
+    // Auto-start the rest timer for the exercise just logged.
+    await ensureRest(payload.exercise_id);
+    startRestFor(payload.exercise_id);
   }
 
   async function ensureRest(exerciseId: string) {
@@ -262,50 +260,47 @@
     try {
       const pref = await api.get<RestPref>(`/api/exercises/${exerciseId}/rest`);
       restByExercise[exerciseId] = pref.effective_rest_seconds;
+      await putKV(`rest:${exerciseId}`, pref.effective_rest_seconds);
     } catch {
-      restByExercise[exerciseId] = 120;
+      restByExercise[exerciseId] = (await getKV<number>(`rest:${exerciseId}`)) ?? 120;
     }
   }
 
+  // Stepper: reflect the new value instantly (previewPatch — no op), debounce
+  // the durable write so a drag mints ONE op carrying the final value.
   const patchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   function patchSetDebounced(setId: string, body: SetUpdate) {
     if (!session) return;
-    const s = session.sets.find((x) => x.id === setId);
-    if (s) {
-      if (body.weight_kg !== undefined) s.weight_kg = body.weight_kg;
-      if (body.reps !== undefined) s.reps = body.reps;
-    }
+    store.previewPatch(setId, body);
     const existing = patchTimers.get(setId);
     if (existing) clearTimeout(existing);
     patchTimers.set(
       setId,
-      setTimeout(async () => {
-        try {
-          const result = await api.patch<SetWriteResult>(
-            `/api/sessions/${session!.id}/sets/${setId}`,
-            body,
-          );
-          celebrate(reconcileServerPrs(result.prs));
-          await load();
-        } catch (err) {
-          error = err instanceof Error ? err.message : 'Failed to update set';
-        }
+      setTimeout(() => {
+        void store.patchSet(setId, body);
       }, 500),
     );
   }
 
+  // Immediate patch (set-type / Effort chips): optimistic + queued at once. May
+  // turn a set into a PR (e.g. warmup→normal), so re-detect for the banner.
   async function patchSetNow(setId: string, body: SetUpdate) {
     if (!session) return;
-    try {
-      const result = await api.patch<SetWriteResult>(
-        `/api/sessions/${session.id}/sets/${setId}`,
-        body,
+    const s = session.sets.find((x) => x.id === setId);
+    if (s) {
+      const nextType = body.set_type ?? s.set_type;
+      const nextRir = 'effort_rir' in body ? (body.effort_rir ?? null) : s.effort_rir;
+      const prs = detectClientSide(
+        s.exercise_id,
+        body.weight_kg ?? s.weight_kg,
+        body.reps ?? s.reps,
+        nextType,
+        nextRir,
+        s.id,
       );
-      celebrate(reconcileServerPrs(result.prs));
-      await load();
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to update set';
+      if (prs.length > 0) celebrate(prs);
     }
+    await store.patchSet(setId, body);
   }
 
   function stepWeight(s: TrainingSet, delta: number) {
@@ -327,12 +322,7 @@
 
   async function deleteSet(setId: string) {
     if (!session) return;
-    try {
-      await api.delete(`/api/sessions/${session.id}/sets/${setId}`);
-      await load();
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to delete set';
-    }
+    await store.deleteSet(setId);
   }
 
   async function moveSet(index: number, dir: -1 | 1) {
@@ -341,15 +331,7 @@
     const target = index + dir;
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target], ids[index]];
-    try {
-      session = await api.put<SessionDetail>(
-        `/api/sessions/${session.id}/sets/order`,
-        { set_ids: ids },
-      );
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to reorder';
-      await load();
-    }
+    await store.reorder(ids);
   }
 
   // --- Plate calculator ---
@@ -359,24 +341,31 @@
     calcOpen = true;
   }
 
-  // --- Rest editor: set a per-exercise default from the UI. ---
+  // --- Rest editor: set a per-exercise default from the UI. The rest PREFERENCE
+  // is a settings write (best-effort online); the local + cached value updates
+  // regardless so the timer reflects it immediately. ---
   async function editRest(exerciseId: string) {
     const current = restByExercise[exerciseId] ?? 120;
     const input = prompt('Rest seconds for this exercise:', String(current));
     if (input === null) return;
     const secs = parseInt(input, 10);
     if (Number.isNaN(secs) || secs < 5 || secs > 1800) return;
+    restByExercise[exerciseId] = secs;
+    await putKV(`rest:${exerciseId}`, secs);
     try {
       const pref = await api.put<RestPref>(`/api/exercises/${exerciseId}/rest`, {
         default_rest_seconds: secs,
       });
       restByExercise[exerciseId] = pref.effective_rest_seconds;
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to save rest';
+      await putKV(`rest:${exerciseId}`, pref.effective_rest_seconds);
+    } catch {
+      // Offline: the override is applied locally + cached; it will not persist
+      // server-side this session, which is acceptable for a rest preference.
     }
   }
 
-  // --- Supersets ---
+  // --- Supersets (offline-capable: expressed as `superset_group` patches that
+  // replay through the normal Set-patch endpoint; ADR-0005). ---
   function toggleSupersetMode() {
     supersetMode = !supersetMode;
     selectedSetIds = new Set();
@@ -396,49 +385,37 @@
   );
   async function confirmSuperset() {
     if (!session || selectedDistinctExercises < 2) return;
-    try {
-      session = await api.post<SessionDetail>(
-        `/api/sessions/${session.id}/supersets`,
-        { set_ids: [...selectedSetIds] },
-      );
-      supersetMode = false;
-      selectedSetIds = new Set();
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to create superset';
+    // Assign the next free group id (mirrors the server's max+1) to each
+    // selected Set via a patch op.
+    const group = nextGroupId(session.sets);
+    const ids = [...selectedSetIds];
+    supersetMode = false;
+    selectedSetIds = new Set();
+    for (const id of ids) {
+      await store.patchSet(id, { superset_group: group });
     }
   }
   async function ungroupSuperset(group: number) {
     if (!session) return;
-    try {
-      session = await api.delete<SessionDetail>(
-        `/api/sessions/${session.id}/supersets/${group}`,
-      );
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to ungroup';
+    const ids = session.sets.filter((s) => s.superset_group === group).map((s) => s.id);
+    for (const id of ids) {
+      await store.patchSet(id, { superset_group: null });
     }
   }
 
+  // Finish + delete: optimistic + queued, then navigate (no network wait).
   async function finish() {
     if (!session || finishing) return;
     finishing = true;
-    try {
-      await api.post(`/api/sessions/${session.id}/finish`);
-      await goto('/sessions');
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to finish session';
-      finishing = false;
-    }
+    await store.finish();
+    await goto('/sessions');
   }
 
   async function deleteSession() {
     if (!session) return;
     if (!confirm('Delete this entire session and all its sets?')) return;
-    try {
-      await api.delete(`/api/sessions/${session.id}`);
-      await goto('/sessions');
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to delete session';
-    }
+    await store.deleteSession();
+    await goto('/sessions');
   }
 
   function flatIndex(setId: string): number {
@@ -468,7 +445,7 @@
   {:else if error && !session}
     <div class="p-6 rounded-xl bg-red-500/10 border border-red-500/20 text-center">
       <p class="text-red-400">{error}</p>
-      <button class="mt-3 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-sm" onclick={load}>Retry</button>
+      <button class="mt-3 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-sm" onclick={() => store.load()}>Retry</button>
     </div>
   {:else if session}
     <!-- Header -->
@@ -487,11 +464,14 @@
           {/if}
         </p>
       </div>
-      <button onclick={deleteSession} class="p-2 text-surface-500 hover:text-red-400 transition-colors" aria-label="Delete session">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-        </svg>
-      </button>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <SyncIndicator />
+        <button onclick={deleteSession} class="p-2 text-surface-500 hover:text-red-400 transition-colors" aria-label="Delete session">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     {#if error}

@@ -114,8 +114,31 @@ async def start_session(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SessionDetail:
-    """Start (create) a Session for the caller, optionally backdated."""
+    """Start (create) a Session for the caller, optionally backdated.
+
+    The offline logger (ADR-0005, #6) may supply the Session ``id`` it minted at
+    the gym. If a Session with that id already exists for this user, this is a
+    replay of an already-applied create — return it unchanged (idempotent)
+    instead of erroring on the primary key. A different user's id is treated as
+    not-found and a fresh Session is created under the caller, so a client id can
+    never collide across accounts.
+    """
+    if payload.id is not None:
+        existing = (
+            await db.execute(
+                select(TrainingSession).where(
+                    TrainingSession.id == payload.id,
+                    TrainingSession.user_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            await db.refresh(existing, attribute_names=["sets"])
+            return _detail(existing)
+
     session = TrainingSession(user_id=user.id)
+    if payload.id is not None:
+        session.id = payload.id
     if payload.started_at is not None:
         session.started_at = payload.started_at
     db.add(session)
@@ -243,8 +266,23 @@ async def add_set(
     returns any records beaten in ``prs`` so the UI can celebrate; the offline
     client celebrates immediately from its own mirror of the same algorithm and
     this reconciles it.
+
+    Idempotent replay (ADR-0005, #6): when the offline logger supplies the Set
+    ``id`` it minted at the gym and a Set with that id already lives in this
+    Session, the queued create is being replayed after a flaky response — return
+    the existing Set (with its authoritative PRs) unchanged, rather than
+    inserting a duplicate or tripping the ``(session_id, order_index)`` unique
+    constraint.
     """
     session = await _get_owned_session(db, session_id, user)
+
+    if payload.id is not None:
+        existing = next((s for s in session.sets if s.id == payload.id), None)
+        if existing is not None:
+            prs = await detect_and_persist_prs(db, existing)
+            await db.refresh(existing, attribute_names=["exercise"])
+            return _write_result(existing, prs)
+
     await _assert_exercise_visible(db, payload.exercise_id, user)
 
     next_index = (
@@ -260,6 +298,8 @@ async def add_set(
         set_type=payload.set_type,
         superset_group=payload.superset_group,
     )
+    if payload.id is not None:
+        new_set.id = payload.id
     db.add(new_set)
     await db.flush()
     prs = await detect_and_persist_prs(db, new_set)

@@ -108,8 +108,8 @@ free text. Demo-video link = computed YouTube "proper form" search URL (no hoste
 Images = jsDelivr CDN URLs (no binaries vendored). API: `/api/exercises` (browse with
 search/muscle/equipment filters, detail, create-custom, `/muscles` + `/equipment` options).
 
-**Session/Set logging** (the live gym-logging core — CONTEXT.md "Session"/"Set"; online only,
-offline sync is #6). A **Session** is what the user logs live (NOT a `Workout`, which is reserved
+**Session/Set logging** (the live gym-logging core — CONTEXT.md "Session"/"Set"; **offline-first**,
+ADR-0005, #6). A **Session** is what the user logs live (NOT a `Workout`, which is reserved
 for imported sensor records). Tables are named `training_sessions`/`training_sets` because
 `session`/`set` collide with reserved/auth identifiers; the API/URL vocabulary stays the clean
 "session"/"set". A `training_set` references exactly one `exercise` (visibility-checked: global ∪
@@ -122,7 +122,36 @@ inherit it). Set order is an explicit 0-based `order_index` kept gap-free server
 add, compact on delete, two-phase rewrite on reorder). All endpoints are per-user scoped via
 `get_current_user`; a Set is reached only through its owning Session. API: `/api/sessions`
 (start/list/get/finish/delete a Session; `/{id}/sets` add, `/{id}/sets/{set_id}` PATCH/DELETE,
-`/{id}/sets/order` PUT reorder).
+`/{id}/sets/order` PUT reorder). **Client-supplied ids** (#6): `SessionCreate`/`SetCreate` accept an
+optional `id` the offline client mints up front, so a queued create replays idempotently — the
+server uses it when present (else generates uuid4), and `add_set` returns the existing Set on a
+replayed id (no duplicate, no `(session_id, order_index)` collision) rather than re-inserting.
+
+**Offline-first sync** (the gym-dead-zone logger — CONTEXT.md "offline"; ADR-0005; #6). The
+logging surface works fully offline; writes are captured in an **IndexedDB op-queue** and synced
+to `/api/sessions...` when connectivity returns (and on app reload while online). The frontend
+layer is `frontend/src/lib/sync/`:
+- **`queue.ts`** — the PURE, IO-free core (vitest `queue.test.ts`): a FIFO `SyncOp` log
+  (startSession / addSet / patchSet / deleteSet / reorderSets / finishSession / deleteSession),
+  `applyOps` to fold it onto a base snapshot into the optimistic view, `collapseQueue` to drop ops
+  that cancel out (a Set created-then-deleted offline vanishes; patches fold into a still-local
+  create — **replay-invariant**), and `reconcileServerSession` to re-apply still-pending ops over a
+  fresh server snapshot. **Last-write-wins per record** (single-device — accounts isolated ADR-0003;
+  no CRDT). **Client-minted UUIDs ⇒ the optimistic id IS the server id, no remap.**
+- **`store.ts`** — IndexedDB persistence (`idb`): durable `ops` (FIFO), `snapshots` (last server
+  snapshot per Session, so a reload rebuilds offline), `kv` (prefetched context). Guarded for SSR.
+- **`engine.ts`** — drains the queue head-first while online (on enqueue, on the `online` event, on
+  app load); preserves order (stops at the first transient failure, retries the tail); drops only a
+  permanent 4xx so one poisoned op can't wedge the queue. Tested in `engine.test.ts` (mocked api).
+- **`session-store.svelte.ts` / `sessions-list.svelte.ts`** — Svelte 5 runes data layer the
+  `/sessions` pages bind to: optimistic snapshot + enqueue, reconcile-on-drain, start-a-Session
+  offline. **`sync-state.svelte.ts`** + `components/sessions/SyncIndicator.svelte` are the trust
+  signal ("Offline — N queued" / "Syncing…" / "Synced", tap-to-retry).
+The **service worker stays `generateSW`** (shell-only): the queue runs IN THE PAGE, not the SW, and
+`/api/*` is deliberately never cached (caching mutations would be wrong). Supersets are expressed
+offline as `superset_group` patches (replayed through the normal Set-patch endpoint), so the
+client no longer needs the `/supersets` endpoints (kept server-side for compatibility). Client-side
+PR detection (`lib/pr.ts`) fires offline; the server reconciles authoritative PRs on sync.
 
 **PR detection + e1RM** (the strength-signal engine core — CONTEXT.md "PR"). Two **pure** modules
 are the canonical definitions reused by analytics (#10) and progression (#11): `services/e1rm.py`
@@ -271,6 +300,10 @@ frontend/src/
 │   ├── api.ts          # API client (fetch with credentials: include)
 │   ├── types.ts        # TypeScript interfaces
 │   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
+│   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
+│   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
+│   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
+│   │                   #   (runes data layer + sync-state the pages bind to)
 │   ├── stores/
 │   │   ├── auth.svelte.ts      # Current user from /api/auth/me (forward-auth)
 │   │   └── date-range.svelte.ts # Global date range + resolution
@@ -278,7 +311,7 @@ frontend/src/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus
-│   │   ├── sessions/   # ExercisePicker (bottom-sheet), SetTypeChip, EffortChips (RIR), PRCelebration (banner)
+│   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
 │   │   └── layout/     # Header, Sidebar, DateRangePicker, BottomNav
 │   └── utils/          # constants.ts, format.ts
 └── routes/

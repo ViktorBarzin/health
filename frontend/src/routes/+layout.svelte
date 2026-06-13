@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import { auth } from '$lib/stores/auth.svelte';
+  import { initSyncEngine } from '$lib/sync/engine';
   import { page } from '$app/stores';
   import Sidebar from '$lib/components/layout/Sidebar.svelte';
   import Header from '$lib/components/layout/Header.svelte';
@@ -19,6 +20,13 @@
   // there is no in-app login. We just resolve who the backend sees.
   $effect(() => {
     auth.checkAuth();
+  });
+
+  // Bring the offline-sync engine up on load (ADR-0005, #6): rehydrate any
+  // queued Session/Set writes from IndexedDB and drain them while online. Runs
+  // once, client-side only (it guards SSR / no-IndexedDB internally).
+  $effect(() => {
+    void initSyncEngine();
   });
 
   let pageTitle = $derived(() => {

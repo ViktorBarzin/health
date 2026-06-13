@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupSessionSets,
+  nextGroupId,
   nextSupersetExerciseId,
   type SetLike,
 } from './superset';
@@ -161,5 +162,26 @@ describe('nextSupersetExerciseId', () => {
   it('returns null for a single-exercise superset (nothing to alternate with)', () => {
     const sets = [s('1', 'bench', 0, 1), s('2', 'bench', 1, 1)];
     expect(nextSupersetExerciseId(sets, '2')).toBeNull();
+  });
+});
+
+describe('nextGroupId', () => {
+  it('is 0 when no Set is grouped', () => {
+    const sets = [s('1', 'bench', 0), s('2', 'row', 1)];
+    expect(nextGroupId(sets)).toBe(0);
+  });
+
+  it('is max existing group + 1', () => {
+    const sets = [s('1', 'bench', 0, 0), s('2', 'row', 1, 0), s('3', 'curl', 2, 2)];
+    expect(nextGroupId(sets)).toBe(3);
+  });
+
+  it('ignores ungrouped (null) Sets', () => {
+    const sets = [s('1', 'bench', 0, 1), s('2', 'row', 1, null), s('3', 'curl', 2)];
+    expect(nextGroupId(sets)).toBe(2);
+  });
+
+  it('is 0 for an empty Session', () => {
+    expect(nextGroupId([])).toBe(0);
   });
 });

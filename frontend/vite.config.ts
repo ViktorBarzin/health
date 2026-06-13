@@ -10,11 +10,17 @@ export default defineConfig({
     // Mobile-first PWA shell (ADR-0007). The phone is the primary surface, so the
     // app is installable to the home screen and the shell loads fast offline.
     //
-    // SCOPE: shell precache only. Offline *data logging* (the IndexedDB write
-    // queue) is a later slice (#6, ADR-0005) and will switch this to the
-    // `injectManifest` strategy with a custom service worker. For now Workbox
-    // generates a minimal SW that precaches the built client assets and serves
-    // navigations network-first, with `/api/*` deliberately never cached.
+    // SCOPE: shell precache + offline navigation fallback. Offline *data logging*
+    // (ADR-0005, #6) is handled IN THE PAGE by an IndexedDB write-queue + sync
+    // engine (`src/lib/sync/*`), NOT by the service worker — so we stay on
+    // `generateSW` rather than `injectManifest`. The SW's only job for offline-
+    // first is to serve the app shell when there's no signal; the queue (running
+    // in the page once the shell loads) captures every Set write locally and
+    // drains it to `/api/sessions...` on reconnect. Caching mutation responses
+    // would be WRONG — `/api/*` is deliberately never cached, and the queue owns
+    // offline writes — so no SW-level `/api/sessions` interception is added.
+    // Background-sync (draining while the app is closed) is intentionally out of
+    // scope (YAGNI): the ADR only requires sync on reconnect + on reload.
     SvelteKitPWA({
       strategies: 'generateSW',
       registerType: 'autoUpdate',

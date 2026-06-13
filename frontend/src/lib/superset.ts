@@ -102,3 +102,17 @@ export function nextSupersetExerciseId<T extends SetLike>(
   const i = rotation.indexOf(set.exercise_id);
   return rotation[(i + 1) % rotation.length];
 }
+
+/**
+ * The next free Superset group id for a Session: max existing group + 1, or 0
+ * when there are none. Mirrors the server's assignment so a Superset created
+ * offline (expressed as `superset_group` patches; ADR-0005) lands on the same
+ * id the server would have chosen.
+ */
+export function nextGroupId(sets: SetLike[]): number {
+  let max = -1;
+  for (const s of sets) {
+    if (s.superset_group !== null && s.superset_group > max) max = s.superset_group;
+  }
+  return max + 1;
+}

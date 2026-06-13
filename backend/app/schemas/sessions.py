@@ -23,6 +23,11 @@ from app.services.pr import PRKind
 class SetCreate(BaseModel):
     """Log one Set into a Session. Appended at the end of the Session's order."""
 
+    # Optional client-supplied id (ADR-0005 offline-first, #6). The offline
+    # logger mints the Set UUID up front so a queued create replays idempotently
+    # — re-POSTing an already-applied id returns the existing Set rather than
+    # duplicating it. Omitted online → the server generates one as before.
+    id: uuid.UUID | None = None
     exercise_id: uuid.UUID
     weight_kg: float = Field(ge=0, le=2000)
     reps: int = Field(ge=0, le=10000)
@@ -157,6 +162,11 @@ class PersonalRecordRead(BaseModel):
 class SessionCreate(BaseModel):
     """Start a Session. ``started_at`` defaults to now() server-side if omitted."""
 
+    # Optional client-supplied id (ADR-0005 offline-first, #6). A Session started
+    # at the gym with no signal mints its UUID locally so its Sets can reference
+    # it and the queued create replays idempotently (re-POSTing the same id
+    # returns the existing Session). Omitted online → the server generates one.
+    id: uuid.UUID | None = None
     started_at: datetime | None = None
     model_config = {"extra": "forbid"}
 

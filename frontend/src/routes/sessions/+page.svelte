@@ -1,41 +1,33 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api';
-  import type { SessionDetail, SessionSummary } from '$lib/types';
+  import SyncIndicator from '$lib/components/sessions/SyncIndicator.svelte';
+  import { createSessionsList, startSessionOffline } from '$lib/sync/sessions-list.svelte';
+  import type { SessionSummary } from '$lib/types';
   import { formatDate, formatNumber, formatTime } from '$lib/utils/format';
 
   // The user's logged Sessions, newest first. "Train" is the core action: the
   // big button starts a fresh Session and drops the user straight into logging.
-  let sessions = $state<SessionSummary[]>([]);
-  let loading = $state(true);
-  let error = $state('');
+  // Offline-first (ADR-0005): the list merges server Sessions with any born
+  // offline (cached, not yet synced), and starting a Session works with zero
+  // signal — its id is minted locally and the start is queued.
+  const list = createSessionsList();
   let starting = $state(false);
 
-  $effect(() => {
-    load();
-  });
+  let sessions = $derived(list.sessions);
+  let loading = $derived(list.loading);
+  let error = $derived(list.error);
 
-  async function load() {
-    loading = true;
-    error = '';
-    try {
-      sessions = await api.get<SessionSummary[]>('/api/sessions/');
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to load sessions';
-    } finally {
-      loading = false;
-    }
-  }
+  $effect(() => {
+    list.load();
+  });
 
   async function startSession() {
     if (starting) return;
     starting = true;
-    error = '';
     try {
-      const created = await api.post<SessionDetail>('/api/sessions/', {});
-      await goto(`/sessions/${created.id}`);
-    } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to start session';
+      const id = await startSessionOffline();
+      await goto(`/sessions/${id}`);
+    } catch {
       starting = false;
     }
   }
@@ -56,6 +48,7 @@
 <div class="space-y-4 pb-24">
   <div class="flex items-center justify-between">
     <h1 class="text-2xl font-semibold text-surface-100">Train</h1>
+    <SyncIndicator />
   </div>
 
   <!-- Resume active or start a new Session -->
