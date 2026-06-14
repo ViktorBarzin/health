@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Chart, registerables } from 'chart.js';
   import type { ChartConfiguration } from 'chart.js';
+  import { DEFAULT_MAX_POINTS, downsample } from '$lib/dashboard';
 
   Chart.register(...registerables);
 
@@ -22,13 +23,15 @@
   let chart: Chart | null = null;
 
   function buildConfig(): ChartConfiguration {
+    // Cap rendered points so a wide window can't freeze the main thread (#51).
+    const points = downsample(data, DEFAULT_MAX_POINTS);
     return {
       type: 'line',
       data: {
-        labels: data.map((_, i) => String(i)),
+        labels: points.map((_, i) => String(i)),
         datasets: [
           {
-            data,
+            data: points,
             borderColor: color,
             borderWidth: 1.5,
             pointRadius: 0,

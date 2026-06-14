@@ -63,6 +63,7 @@ backend/app/
 ├── services/
 │   ├── xml_parser.py  # Producer-consumer XML parsing pipeline
 │   ├── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
+│   ├── rollup.py      # Daily metric rollups (ADR-0009): backfill (gated) + targeted post-ingest recompute + day/week/month read helper
 │   ├── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
 │   ├── effort.py      # Pure Effort RIR↔RPE mapping (one-tap chip ↔ stored RPE-equivalent)
 │   ├── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
@@ -100,6 +101,7 @@ backend/app/
 |-------|-----|-------------|
 | `health_records` | (time, user_id, metric_type) | (user_id, metric_type, time), (batch_id) |
 | `category_records` | (time, user_id, category_type) | (batch_id) |
+| `metric_daily` | (user_id, metric_type, day) | — (PK serves the read + upsert) |
 | `workouts` | id (UUID) | UNIQUE(user_id, time, activity_type), (batch_id) |
 | `workout_route_points` | (time, workout_id) | (workout_id) |
 | `activity_summaries` | (date, user_id) | — |
@@ -543,6 +545,98 @@ Key details:
 - **Raw metrics**: Capped at 10K rows (configurable via `limit` param, max 100K)
 - **Workout listings**: JSONB `metadata_` column deferred via `defer()`
 
+## Daily metric rollups (ADR-0009)
+
+The dashboard/metrics read path used to aggregate raw `health_records` on every wide-window
+load — a `GROUP BY date_trunc('day', time)` over ~1.05M HeartRate rows spills the sort to disk
+(~1.6 s), several per load. Fix: a **`metric_daily` rollup table** (one row per
+`(user_id, metric_type, day)` with `count`/`sum`/`min`/`max`/`unit`; avg is **derived**
+`sum/count`, never stored) and the read path reads that. A 1M-row scan becomes a ≤~1,900-row
+read. All in `services/rollup.py` (the clean, unit-tested home for the recompute + read logic):
+
+- **Read path** (`fetch_rollup_series`, wired into `api/metrics.py` `_fetch_health_metric` and
+  the `api/dashboard.py` summary SUM) serves **day/week/month** from `metric_daily`. Week/month
+  **re-bucket the daily rows** with the **same** `date_trunc` the raw path used
+  (`date_trunc(interval, day::timestamptz)`, UTC session) so rollup answers **equal** the old
+  raw-aggregation answers (the cardinal property, pinned by `test_rollup*`; avg agrees to float
+  tolerance — Σ-of-day-sums regroups double addition, ~1e-4 at the 4dp boundary). Sum-vs-avg
+  reuses the endpoints' existing `_CUMULATIVE_METRICS`/`_SUM_METRICS` split: cumulative → Σsum,
+  else Σsum/Σcount. **`raw` resolution still reads `health_records`** directly (capped). The
+  summary's **latest-value** (`DISTINCT ON`) + **sleep** parts stay on the raw tables (already fast).
+  The **available-metrics list** (`GET /api/metrics/available` → `_list_health_metrics`) also reads
+  the rollup (`fetch_available_health_metrics`): Σ`count` (exact) + `max(day)` + a representative
+  `unit`, replacing an 8 s `GROUP BY metric_type` over 6.6M raw rows (on the dashboard first-load
+  critical path — #51 clamps the default window from its `latest_time`). **`latest_time` is now
+  day-granular** for health metrics (`max(day)` at midnight UTC, not the reading instant) — all its
+  consumers (display + the day-granular default-window clamp) only need day precision. The
+  **category_records portion stays query-time** (ADR-0009: ~45 ms even at a generous 200K rows;
+  it never showed up as a bottleneck).
+- **Backfill / rebuild** (`backfill_all`, `python -m app.services.rollup`, run from
+  `entrypoint.sh`) is one `GROUP BY user_id, metric_type, date_trunc('day', time)`. **Gated**: it
+  skips immediately when `metric_daily` is already populated (a `LIMIT 1` probe), so a normal pod
+  restart does NOT re-scan the ~6.6M-row table — only the first deploy pays the GROUP BY.
+  `--rebuild` (or `ROLLUP_REBUILD=1`) TRUNCATEs + rebuilds for recovery. Derived data: a rebuild
+  is always the recovery path.
+- **Kept fresh on ingest** by a **targeted** post-batch recompute (`recompute_for_rows` →
+  `recompute_buckets`): after a batch writes `health_records`, only the distinct
+  `(user, metric, day)` keys that batch touched are re-derived (delete-then-reinsert per key, so
+  idempotent + self-healing — a bucket whose raw rows all vanished is removed). Wired into the
+  **Apple Health XML pipeline** (`xml_parser._flush_batch`, isolated session, never breaks the
+  import) and the **Connector sync** (`connection_query.sync_connection`, same transaction,
+  idempotent like the dedup). **Fitbod import writes `training_sets`, not `health_records`, so it's
+  out of scope.** Only `health_records` is rolled up — `category_records` (sleep) stay query-time.
+
+## Observability (perf-telemetry)
+
+Lightweight, structured backend telemetry to stdout (scraped by the cluster's Loki — no HTTP log
+shipper, stdlib `logging` only), all in `core/observability.py`:
+- **Request timing** — `RequestTimingMiddleware` (a `BaseHTTPMiddleware`, added in `main.py` just
+  inside CORS) logs one **logfmt** line per request on the `app.request` logger
+  (`method=… path=… route=… status=… dur_ms=… user=…`), where `route` is the matched route
+  template (falls back to the raw path on a 404) and `user` mirrors `_identity_email` (the
+  `X-authentik-email` header or `DEV_AUTH_EMAIL`, **`-` when absent — no DB lookup, never raises**).
+  It also sets `Server-Timing: app;dur=<ms>` + `X-Process-Time-Ms` response headers so client
+  devtools see backend time. Logging never breaks a request (all emission is wrapped).
+- **Slow-query logging** — `register_slow_query_logging(engine)` attaches `before/after_cursor_execute`
+  events to the async engine's **`engine.sync_engine`** (a start time stashed on `conn.info`); any
+  statement over `SLOW_QUERY_MS` (default 200) is logged once on `app.slow_query` (warning) with the
+  elapsed ms + the **truncated** statement (bound params omitted). Idempotent (guarded by a marker).
+- **Config** — `configure_logging()` (idempotent: one stdout handler on each named logger,
+  `propagate=False` so uvicorn's root handler can't re-emit) at `LOG_LEVEL` (default INFO);
+  **uvicorn's own loggers are left untouched**. Both `configure_logging` + the slow-query listener
+  run at `main.py` import time. Knobs: `LOG_LEVEL`, `SLOW_QUERY_MS`. (YAGNI: no Prometheus/tracing.)
+
+## Dashboard fast + progressive load (perf-telemetry, #51)
+
+The frontend half of the slow-load fix (the backend half is the daily rollups above). The dashboard
+"became unresponsive until all data loaded" — three problems, all fixed in `routes/+page.svelte` +
+two pure helpers in `lib/dashboard.ts` (vitest `dashboard.test.ts`):
+- **Parallel, not serial** — the page fired **6 requests in 3 SERIAL `Promise.allSettled` pairs**
+  (3 round-trips). Now it fires **all 6 concurrently in one batch**, so total latency ≈ the slowest
+  single request. The `loadVersion` stale-response race guard is kept (each request's `.then/.finally`
+  is version-gated via a `fresh()` check, so a fast range change can't render stale data).
+- **Progressive render** — the single global `loading` gate **blanked the whole dashboard** until the
+  slowest request returned. Replaced with **per-source loading flags** (summary / rings / steps /
+  energy / hr / exercise): the page is interactive immediately (skeletons) and **each card fills in
+  independently** as its own request resolves. The error banner shows **only when every request
+  failed** (a card that loaded stands on its own).
+- **Downsample / cap rendered points** — `lib/dashboard.ts` `downsample` is **Largest-Triangle-
+  Three-Buckets** (preserves first/last + peaks/troughs; input ≤ N → returned unchanged by reference;
+  empty → empty; threshold < 2 → the two endpoints), with a `downsampleSeries` wrapper for the
+  `{time,value}` chart shape. Applied **defensively inside the chart components themselves**
+  (`Sparkline`, `TimeSeriesChart`, `BarChart`) at `DEFAULT_MAX_POINTS` (365 ≈ one-per-day for a year),
+  so every caller is protected and a wide `raw`/all-time window can't flood Chart.js + freeze the main
+  thread. With day-resolution rollups this is usually a no-op.
+- **Default window clamps to the user's latest data** — the date-range default was the trailing 30
+  days **ending today**, which is **empty** for a user whose data ended in the past → a blank
+  dashboard. On first load the dashboard fetches `GET /api/metrics/available`, takes the **max
+  `latest_time`** across metrics, and opens on the **trailing 90 days ending at that instant** via
+  `lib/dashboard.ts` `computeDefaultWindow` (midnight-normalised bounds, matching the store's
+  `startISO`/`endISO`; **no data anywhere → the prior last-30-days-ending-today fallback**). The store
+  (`stores/date-range.svelte.ts`) gained `applyDefaultWindow(metrics)` + a `defaultApplied` flag so it
+  applies **once** and a manual preset/range choice (which sets `defaultApplied`) is never clobbered.
+  The first data load is gated on this resolution so no wasted fetch fires over the empty default.
+
 ## Frontend Structure
 
 ```
@@ -555,6 +649,7 @@ frontend/src/
 │   ├── nutrition.ts    # Pure macro view-logic: scale/format/split + history→chart series (vitest) (#21)
 │   ├── barcode.ts      # Pure scan logic: normalize/validate barcode, engine pick, ScanDebouncer (vitest) (#22)
 │   ├── budget.ts       # Pure Budget view-logic: remaining (target−logged), goal label, rate/trend strings (vitest) (#23)
+│   ├── dashboard.ts    # Pure dashboard perf helpers: downsample (LTTB, cap rendered points) + computeDefaultWindow (clamp to latest data) (vitest) (#51)
 │   ├── sync/           # Offline-first sync (ADR-0005, #6): queue.ts (PURE FIFO op
 │   │                   #   log + replay/collapse/reconcile, vitest), store.ts (IndexedDB
 │   │                   #   via idb), engine.ts (drain on reconnect/load), *.svelte.ts
@@ -609,17 +704,18 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `e5f6a7b8c9d0`
-(`add per-user Connections (BYOT integrations)`, connections/ADR-0006; chains off
-`d4e5f6a7b8c9` recipes).
+Alembic migrations in `backend/alembic/versions/`. Current head: `f6a7b8c9d0e1`
+(`add metric_daily rollup table`, ADR-0009; chains off `e5f6a7b8c9d0` connections).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
-After migrations, `entrypoint.sh` runs three idempotent seeds (best-effort — a seed failure
-does not block boot), each runnable manually via the same `python -m` command:
-`app.services.seed_exercises` (the shared Exercise library from the vendored free-exercise-db
-dataset), `app.services.seed_principles` (the cited Principles KB, ADR-0004), and
-`app.services.seed_foods` (the generic whole-foods Food catalog, #21).
+After migrations, `entrypoint.sh` runs three idempotent seeds then the rollup backfill
+(best-effort — a failure does not block boot), each runnable manually via the same `python -m`
+command: `app.services.seed_exercises` (the shared Exercise library from the vendored
+free-exercise-db dataset), `app.services.seed_principles` (the cited Principles KB, ADR-0004),
+`app.services.seed_foods` (the generic whole-foods Food catalog, #21), and
+`app.services.rollup` (the daily metric-rollup backfill, ADR-0009 — gated to skip when already
+populated; `--rebuild` forces a full rebuild).
 
 ## CI/CD
 
@@ -646,6 +742,18 @@ CONNECTION_ENCRYPTION_KEY=...  # Fernet key (URL-safe base64 32-byte) encrypting
                        #   value on the app AND the sync CronJob. Comma-separated
                        #   list = key rotation (new,old). UNSET ⇒ Connections
                        #   disabled (API 503) — fail closed, never store plaintext.
+LOG_LEVEL=...          # Observability (perf-telemetry): level for the app's own
+                       #   loggers (app.request / app.slow_query). Default INFO;
+                       #   uvicorn's loggers are left untouched.
+SLOW_QUERY_MS=...      # Observability (perf-telemetry): any SQL statement slower
+                       #   than this many ms is logged once on app.slow_query with
+                       #   its elapsed time + truncated statement. Default 200;
+                       #   <=0 logs every statement.
+ROLLUP_REBUILD=...     # Daily metric rollups (ADR-0009): set to "1" to force the
+                       #   `python -m app.services.rollup` backfill to TRUNCATE +
+                       #   fully rebuild metric_daily (recovery). Default unset —
+                       #   the backfill skips when the table is already populated
+                       #   (a normal restart never re-scans health_records).
 ```
 
 Set in `.env` file, loaded by docker-compose.

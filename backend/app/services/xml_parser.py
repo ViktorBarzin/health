@@ -32,6 +32,7 @@ from app.models.health_record import HealthRecord
 from app.models.import_batch import ImportBatch
 from app.models.workout import Workout
 from app.models.workout_route_point import WorkoutRoutePoint
+from app.services import rollup
 from app.services.dedup import (
     bulk_insert_activity_summaries,
     bulk_insert_category_records,
@@ -761,6 +762,19 @@ async def _flush_batch(
             except Exception:
                 logger.exception("Failed to insert %d %s", len(rows), label)
 
+    # Keep the daily rollups fresh for the (user, metric, day) buckets this batch
+    # touched (ADR-0009) — a targeted recompute, not a full rebuild. Isolated in
+    # its own session and never allowed to break the import (the rollup is derived
+    # data; a full rebuild is the recovery path).
+    if batch.health:
+        try:
+            await _refresh_rollups(db_session_factory, batch.health)
+        except Exception:
+            logger.exception(
+                "Failed to refresh metric_daily rollups for %d health rows",
+                len(batch.health),
+            )
+
     # Workouts + route points (FK dependency) handled together
     if batch.workouts:
         try:
@@ -783,6 +797,21 @@ async def _insert_table(db_session_factory: async_sessionmaker, insert_fn, rows:
     """Insert rows into a single table using its own session."""
     async with db_session_factory() as session:
         await insert_fn(session, rows)
+        await session.commit()
+
+
+async def _refresh_rollups(
+    db_session_factory: async_sessionmaker, health_rows: list[dict[str, Any]]
+) -> None:
+    """Recompute the daily rollup buckets the batch's health rows touched.
+
+    Uses its own session (the per-table isolation pattern). Targeted to the
+    distinct (user, metric, day) keys in this batch — the raw rows were already
+    committed by :func:`_insert_table`, so the recompute reads the full current
+    truth for those buckets.
+    """
+    async with db_session_factory() as session:
+        await rollup.recompute_for_rows(session, health_rows)
         await session.commit()
 
 

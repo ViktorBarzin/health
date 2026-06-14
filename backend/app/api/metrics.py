@@ -1,6 +1,6 @@
 """Health metrics API routes."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
@@ -18,6 +18,7 @@ from app.schemas.metrics import (
     MetricStats,
     Resolution,
 )
+from app.services import rollup
 
 router = APIRouter()
 
@@ -96,30 +97,62 @@ def _bucket_interval(resolution: Resolution) -> str:
     }[resolution]
 
 
+def _rollup_day_bounds(
+    start: datetime | None, end: datetime | None
+) -> tuple[date | None, date | None]:
+    """Map a request time-window to inclusive WHOLE-UTC-DAY bounds for the rollup.
+
+    **By design, day/week/month resolutions operate on whole UTC days** — a partial
+    day is meaningless at day-and-coarser granularity (you can't show "half of
+    Tuesday" on a daily/weekly/monthly chart), so a non-midnight ``start``/``end`` is
+    floored/ceilinged to its enclosing UTC day rather than truncating a day's bucket
+    mid-stream. ``start`` floors to its UTC day (the whole day is included);
+    ``end`` ceilings to its UTC day (the whole ``end`` day is included). This is a
+    deliberate, documented contract for the aggregated resolutions and the only place
+    the day grain is decided.
+
+    **`raw` resolution is unaffected and stays exact-instant** — it never calls this;
+    it filters ``health_records`` on the precise ``time >= start`` / ``time <= end``
+    instants (see ``_fetch_health_metric``'s ``base_filter``).
+    """
+    start_date = (
+        _ensure_utc(start).astimezone(timezone.utc).date() if start is not None else None
+    )
+    end_date = (
+        _ensure_utc(end).astimezone(timezone.utc).date() if end is not None else None
+    )
+    return start_date, end_date
+
+
 async def _list_health_metrics(
     user_id: int,
     db: AsyncSession,
 ) -> list[MetricAvailable]:
-    stmt = (
-        select(
-            HealthRecord.metric_type,
-            func.max(HealthRecord.unit).label("unit"),
-            func.count().label("count"),
-            func.max(HealthRecord.time).label("latest_time"),
-        )
-        .where(HealthRecord.user_id == user_id)
-        .group_by(HealthRecord.metric_type)
-        .order_by(HealthRecord.metric_type)
-    )
-    result = await db.execute(stmt)
+    """List the user's health metrics + aggregates from the daily rollup (ADR-0009).
+
+    Reads ``metric_daily`` (the user's ~thousands of rollup rows) instead of a
+    ``GROUP BY metric_type`` over the whole ``health_records`` table (measured 8 s
+    over 6.6M rows on prod, and on the dashboard first-load critical path). ``count``
+    is exact (Σ daily counts == the raw reading count); ``latest_time`` is
+    **day-granular** for health metrics now — it's ``max(day)`` at midnight UTC, not
+    the original reading instant — which is all its consumers need (display + the
+    day-granular default-window clamp in `lib/dashboard.ts`).
+    """
+    rows = await rollup.fetch_available_health_metrics(db, user_id=user_id)
     return [
         MetricAvailable(
-            metric_type=row.metric_type,
-            unit=row.unit or "",
-            count=row.count,
-            latest_time=row.latest_time,
+            metric_type=row["metric_type"],
+            unit=row["unit"] or "",
+            count=row["count"],
+            # The rollup's finest grain is the day; surface it as a midnight-UTC
+            # instant so the schema's datetime field round-trips cleanly.
+            latest_time=(
+                datetime.combine(row["latest_day"], time.min, tzinfo=timezone.utc)
+                if row["latest_day"] is not None
+                else None
+            ),
         )
-        for row in result.all()
+        for row in rows
     ]
 
 
@@ -198,37 +231,36 @@ async def _fetch_health_metric(
         stats = _build_stats([point.value for point in data])
         return MetricResponse(data=data, stats=_apply_trend(stats, data))
 
+    # day/week/month read from the daily rollup (ADR-0009): a ~1,900-row read
+    # instead of a ~1M-row scan+sort over health_records. Week/month re-bucket the
+    # daily rows with the same date_trunc the raw path used, so the answer is
+    # identical. Sum-type metrics (StepCount, ActiveEnergyBurned, …) total Σsum;
+    # everything else averages Σsum/Σcount — reusing the same _CUMULATIVE_METRICS
+    # split the raw query used (func.sum vs func.avg).
     interval = _bucket_interval(resolution)
-    bucket = func.date_trunc(interval, HealthRecord.time).label("bucket")
-    aggregate_fn = (
-        func.sum if metric_type in _CUMULATIVE_METRICS else func.avg
+    aggregate = "sum" if metric_type in _CUMULATIVE_METRICS else "avg"
+    start_date, end_date = _rollup_day_bounds(start, end)
+    rows = await rollup.fetch_rollup_series(
+        db,
+        user_id=user_id,
+        metric_type=metric_type,
+        interval=interval,
+        aggregate=aggregate,
+        start=start_date,
+        end=end_date,
     )
-    stmt = (
-        select(
-            bucket,
-            aggregate_fn(HealthRecord.value).label("bucket_value"),
-            func.min(HealthRecord.value).label("min_value"),
-            func.max(HealthRecord.value).label("max_value"),
-            func.count().label("cnt"),
-        )
-        .where(*base_filter)
-        .group_by(text("1"))
-        .order_by(text("1"))
-    )
-    result = await db.execute(stmt)
-    rows = result.all()
     data = [
         MetricDataPoint(
-            time=row.bucket,
-            value=round(row.bucket_value, 4),
-            min=round(row.min_value, 4),
-            max=round(row.max_value, 4),
+            time=row["bucket"],
+            value=round(row["value"], 4),
+            min=round(row["min"], 4),
+            max=round(row["max"], 4),
         )
         for row in rows
     ]
     stats = _build_stats([point.value for point in data])
     if rows:
-        stats.count = sum(row.cnt for row in rows)
+        stats.count = sum(row["count"] for row in rows)
     return MetricResponse(data=data, stats=_apply_trend(stats, data))
 
 
