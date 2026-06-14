@@ -1,104 +1,264 @@
 @import 'tailwindcss';
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Athletic Instrument — design system (ADR-0008)
+
+   Near-monochrome surfaces, a single volt-lime accent, Geist Sans + Geist Mono.
+   Everything is a SEMANTIC TOKEN: components never hardcode a colour, and the
+   light theme is the same tokens with a second value set (follows the OS via
+   prefers-color-scheme, overridable with [data-theme]). The eight metric
+   colours live ONLY in charts (the --chart-* tokens), never in chrome.
+
+   Two token families coexist on purpose:
+   • New semantic tokens (--base/--panel/--ink/--accent…) exposed as Tailwind
+     utilities (bg-base, text-ink, bg-accent…) — what new screens use.
+   • The legacy surface-*/primary-* scale is REMAPPED onto theme-reactive
+     variables so the ~35 not-yet-redesigned components instantly adopt the new
+     palette + light/dark without per-file edits (they get re-skinned bespoke in
+     their own slices).
+   Fonts are imported in +layout.svelte (self-hosted @fontsource, no CDN).
+   ─────────────────────────────────────────────────────────────────────────── */
+
 @theme {
-  /* Primary palette - health/fitness greens and blues */
-  --color-primary-50: #ecfdf5;
-  --color-primary-100: #d1fae5;
-  --color-primary-200: #a7f3d0;
-  --color-primary-300: #6ee7b7;
-  --color-primary-400: #34d399;
-  --color-primary-500: #10b981;
-  --color-primary-600: #059669;
-  --color-primary-700: #047857;
-  --color-primary-800: #065f46;
-  --color-primary-900: #064e3b;
+  /* Type — Geist (self-hosted variable woff2). */
+  --font-sans: 'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /* Accent palette - blues */
-  --color-accent-50: #eff6ff;
-  --color-accent-100: #dbeafe;
-  --color-accent-200: #bfdbfe;
-  --color-accent-300: #93c5fd;
-  --color-accent-400: #60a5fa;
-  --color-accent-500: #3b82f6;
-  --color-accent-600: #2563eb;
-  --color-accent-700: #1d4ed8;
-  --color-accent-800: #1e40af;
-  --color-accent-900: #1e3a8a;
+  /* New semantic colour tokens → Tailwind utilities (bg-base, text-ink, …). */
+  --color-base: var(--base);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-elevated: var(--elevated);
+  --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-positive: var(--positive);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
 
-  /* Surface colors - dark theme */
-  --color-surface-50: #f8fafc;
-  --color-surface-100: #f1f5f9;
-  --color-surface-200: #e2e8f0;
-  --color-surface-300: #cbd5e1;
-  --color-surface-400: #94a3b8;
-  --color-surface-500: #64748b;
-  --color-surface-600: #475569;
-  --color-surface-700: #334155;
-  --color-surface-800: #1e293b;
-  --color-surface-900: #0f172a;
-  --color-surface-950: #020617;
+  /* Legacy scale remapped onto the theme-reactive ramp (flips for light). */
+  --color-surface-950: var(--s-950);
+  --color-surface-900: var(--s-900);
+  --color-surface-800: var(--s-800);
+  --color-surface-700: var(--s-700);
+  --color-surface-600: var(--s-600);
+  --color-surface-500: var(--s-500);
+  --color-surface-400: var(--s-400);
+  --color-surface-300: var(--s-300);
+  --color-surface-200: var(--s-200);
+  --color-surface-100: var(--s-100);
+  --color-surface-50: var(--s-50);
+
+  /* Legacy primary/accent → volt-lime identity. */
+  --color-primary-300: var(--accent-soft);
+  --color-primary-400: var(--accent-ink);
+  --color-primary-500: var(--accent);
+  --color-primary-600: var(--accent-strong);
+  --color-primary-700: var(--accent-strong);
+  --color-accent-400: var(--accent-ink);
+  --color-accent-500: var(--accent);
+  --color-accent-600: var(--accent-strong);
+
+  /* Radii + motion. */
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
+/* ── Dark theme (default) ──────────────────────────────────────────────── */
 :root {
-  --bg-app: var(--color-surface-950);
-  --bg-sidebar: var(--color-surface-900);
-  --bg-card: var(--color-surface-800);
-  --bg-card-hover: var(--color-surface-700);
-  --bg-input: var(--color-surface-700);
-  --bg-input-focus: var(--color-surface-600);
+  color-scheme: dark;
 
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-inverse: #0f172a;
+  --base: #0a0a0b;
+  --panel: #141417;
+  --panel-2: #1c1c21;
+  --elevated: #26262c;
+  --edge: #2a2a31;
+  --edge-strong: #3a3a43;
+  --ink: #f4f4f5;
+  --ink-2: #a1a1aa;
+  --ink-3: #71717a;
 
-  --border-color: var(--color-surface-700);
-  --border-focus: var(--color-primary-500);
+  --accent: #ccff00;
+  --accent-strong: #d8ff40;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --on-accent: #0a0a0b;
+  --accent-ink: #c3f53a;
 
-  --ring-color: var(--color-primary-500);
+  --positive: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
 
-  /* Metric-specific colors */
-  --color-heart: #ef4444;
-  --color-steps: #10b981;
-  --color-energy: #f59e0b;
-  --color-sleep: #8b5cf6;
-  --color-oxygen: #06b6d4;
-  --color-weight: #ec4899;
-  --color-workout: #f97316;
-  --color-distance: #3b82f6;
+  /* Legacy ramp (perceptual bg→fg). */
+  --s-950: #0a0a0b;
+  --s-900: #141417;
+  --s-800: #1c1c21;
+  --s-700: #2a2a31;
+  --s-600: #3f3f46;
+  --s-500: #52525b;
+  --s-400: #a1a1aa;
+  --s-300: #c4c4cb;
+  --s-200: #e4e4e7;
+  --s-100: #f0f0f2;
+  --s-50: #fafafa;
+
+  /* Chart-only metric palette (never used in chrome). */
+  --chart-heart: #fb5d6b;
+  --chart-steps: #2fd07a;
+  --chart-energy: #f9a23b;
+  --chart-sleep: #9d7bff;
+  --chart-oxygen: #2dd4d4;
+  --chart-weight: #f472b6;
+  --chart-workout: #ff7849;
+  --chart-distance: #4d96ff;
+  /* Back-compat aliases for inline var(--color-*) chart usages. */
+  --color-heart: var(--chart-heart);
+  --color-steps: var(--chart-steps);
+  --color-energy: var(--chart-energy);
+  --color-sleep: var(--chart-sleep);
+  --color-oxygen: var(--chart-oxygen);
+  --color-weight: var(--chart-weight);
+  --color-workout: var(--chart-workout);
+  --color-distance: var(--chart-distance);
 }
 
+/* ── Light theme (OS preference + explicit override) ───────────────────── */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --base: #fafaf9;
+    --panel: #ffffff;
+    --panel-2: #f4f4f5;
+    --elevated: #ececee;
+    --edge: rgba(9, 9, 11, 0.1);
+    --edge-strong: rgba(9, 9, 11, 0.18);
+    --ink: #0a0a0b;
+    --ink-2: #52525b;
+    --ink-3: #8a8a93;
+
+    --accent: #a9dc00;
+    --accent-strong: #95c400;
+    --accent-soft: color-mix(in srgb, var(--accent) 20%, transparent);
+    --on-accent: #16200a;
+    --accent-ink: #4d7c0f;
+
+    --s-950: #fafaf9;
+    --s-900: #ffffff;
+    --s-800: #f4f4f5;
+    --s-700: #e4e4e7;
+    --s-600: #d4d4d8;
+    --s-500: #a1a1aa;
+    --s-400: #71717a;
+    --s-300: #52525b;
+    --s-200: #27272a;
+    --s-100: #18181b;
+    --s-50: #0a0a0b;
+  }
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --base: #fafaf9;
+  --panel: #ffffff;
+  --panel-2: #f4f4f5;
+  --elevated: #ececee;
+  --edge: rgba(9, 9, 11, 0.1);
+  --edge-strong: rgba(9, 9, 11, 0.18);
+  --ink: #0a0a0b;
+  --ink-2: #52525b;
+  --ink-3: #8a8a93;
+
+  --accent: #a9dc00;
+  --accent-strong: #95c400;
+  --accent-soft: color-mix(in srgb, var(--accent) 20%, transparent);
+  --on-accent: #16200a;
+  --accent-ink: #4d7c0f;
+
+  --s-950: #fafaf9;
+  --s-900: #ffffff;
+  --s-800: #f4f4f5;
+  --s-700: #e4e4e7;
+  --s-600: #d4d4d8;
+  --s-500: #a1a1aa;
+  --s-400: #71717a;
+  --s-300: #52525b;
+  --s-200: #27272a;
+  --s-100: #18181b;
+  --s-50: #0a0a0b;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
 html {
-  background-color: var(--bg-app);
-  color: var(--text-primary);
+  background-color: var(--base);
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv01', 'ss01';
 }
 
-/* Scrollbar styling */
+/* Live numbers read like an instrument: mono, tabular, tight. */
+.tabular,
+.readout {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.readout {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+/* On a solid volt-lime fill, text is always the dark on-accent ink — keeps
+   legacy buttons (bg-primary-500 text-white) legible before their redesign.
+   Unlayered, so it wins over Tailwind's layered text-* utilities. */
+.bg-primary-500,
+.bg-primary-600,
+.bg-primary-700,
+.bg-accent {
+  color: var(--on-accent);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Focus ring — accent, visible, keyboard-only. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
-
 ::-webkit-scrollbar-track {
-  background: var(--bg-app);
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: var(--color-surface-600);
-  border-radius: 3px;
+  background: var(--edge-strong);
+  border-radius: 99px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-surface-500);
-}
-
-/* Transition utilities */
-.transition-sidebar {
-  transition: transform 0.3s ease, width 0.3s ease;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

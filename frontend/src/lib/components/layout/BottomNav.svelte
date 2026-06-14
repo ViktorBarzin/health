@@ -1,95 +1,108 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import {
-    MOBILE_OVERFLOW,
-    MOBILE_PRIMARY,
+    MORE_GROUPS,
+    MORE_ICON,
+    PRIMARY_TABS,
     isActive,
-    isOverflowActive,
+    isMoreActive,
+    tabIsActive,
   } from '$lib/nav';
+  import BottomSheet from '$lib/components/ui/BottomSheet.svelte';
+  import { haptic } from '$lib/ui/haptics';
 
-  // Phone-first primary navigation (ADR-0007): a fixed bottom tab bar that sits
-  // in the thumb zone for one-handed use at a gym rack. Hidden on lg+ where the
-  // desktop Sidebar takes over. Pinned tabs + a "More" sheet keep every page
-  // reachable.
+  // Phone-first primary navigation (ADR-0007): a fixed bottom tab bar in the
+  // thumb zone for one-handed use at the rack. Four route tabs + a "More" sheet
+  // keep every page reachable; hidden on lg+ where the Sidebar takes over.
   let moreOpen = $state(false);
-
   const pathname = $derived($page.url.pathname);
-  const overflowActive = $derived(isOverflowActive(pathname));
-
-  function closeMore() {
-    moreOpen = false;
-  }
+  const moreActive = $derived(isMoreActive(pathname));
 </script>
 
-<!-- Overflow sheet -->
-{#if moreOpen}
-  <button
-    class="fixed inset-0 bg-black/60 z-40 lg:hidden"
-    onclick={closeMore}
-    aria-label="Close menu"
-  ></button>
-  <div
-    class="fixed bottom-0 inset-x-0 z-50 lg:hidden bg-surface-900 border-t border-surface-700
-           rounded-t-2xl pb-[env(safe-area-inset-bottom)] shadow-2xl"
-    role="dialog"
-    aria-label="More navigation"
-  >
-    <div class="mx-auto my-2 h-1 w-10 rounded-full bg-surface-600"></div>
-    <nav class="grid grid-cols-3 gap-1 p-3">
-      {#each MOBILE_OVERFLOW as item}
-        {@const active = isActive(item.href, pathname)}
-        <a
-          href={item.href}
-          onclick={closeMore}
-          class="flex flex-col items-center gap-1.5 rounded-xl py-3 text-xs font-medium transition-colors
-                 {active
-                   ? 'bg-primary-500/15 text-primary-400'
-                   : 'text-surface-400 hover:bg-surface-800 hover:text-surface-200'}"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d={item.icon} />
-          </svg>
-          <span>{item.label}</span>
-        </a>
-      {/each}
-    </nav>
-  </div>
-{/if}
-
-<!-- Bottom tab bar -->
 <nav
-  class="fixed bottom-0 inset-x-0 z-30 lg:hidden bg-surface-900/95 backdrop-blur border-t border-surface-700
-         pb-[env(safe-area-inset-bottom)]"
+  class="fixed inset-x-0 bottom-0 z-30 border-t border-edge bg-panel/90 backdrop-blur-xl pb-[env(safe-area-inset-bottom)] lg:hidden"
   aria-label="Primary"
 >
   <div class="grid grid-cols-5">
-    {#each MOBILE_PRIMARY as item}
-      {@const active = isActive(item.href, pathname)}
+    {#each PRIMARY_TABS as tab (tab.href)}
+      {@const active = tabIsActive(tab, pathname)}
       <a
-        href={item.href}
-        class="flex flex-col items-center justify-center gap-0.5 py-2 text-[0.65rem] font-medium transition-colors
-               {active ? 'text-primary-400' : 'text-surface-400 hover:text-surface-200'}"
+        href={tab.href}
+        onclick={() => haptic('select')}
         aria-current={active ? 'page' : undefined}
+        class="relative flex flex-col items-center justify-center gap-1 py-2.5 transition-colors duration-150 {active
+          ? 'text-accent-ink'
+          : 'text-ink-3'}"
       >
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.75">
-          <path stroke-linecap="round" stroke-linejoin="round" d={item.icon} />
+        {#if active}<span class="absolute top-0 h-0.5 w-8 rounded-full bg-accent"></span>{/if}
+        <svg
+          class="h-6 w-6"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          stroke-width={active ? 2 : 1.6}
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d={tab.icon} />
         </svg>
-        <span>{item.label}</span>
+        <span class="text-[0.65rem] font-medium tracking-wide">{tab.label}</span>
       </a>
     {/each}
 
-    <!-- More -->
     <button
-      onclick={() => (moreOpen = !moreOpen)}
-      class="flex flex-col items-center justify-center gap-0.5 py-2 text-[0.65rem] font-medium transition-colors
-             {overflowActive || moreOpen ? 'text-primary-400' : 'text-surface-400 hover:text-surface-200'}"
+      onclick={() => {
+        haptic('select');
+        moreOpen = true;
+      }}
       aria-expanded={moreOpen}
       aria-label="More"
+      class="relative flex flex-col items-center justify-center gap-1 py-2.5 transition-colors duration-150 {moreActive ||
+      moreOpen
+        ? 'text-accent-ink'
+        : 'text-ink-3'}"
     >
-      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.75">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+      {#if moreActive}<span class="absolute top-0 h-0.5 w-8 rounded-full bg-accent"></span>{/if}
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d={MORE_ICON} />
       </svg>
-      <span>More</span>
+      <span class="text-[0.65rem] font-medium tracking-wide">More</span>
     </button>
   </div>
 </nav>
+
+<BottomSheet bind:open={moreOpen} title="More">
+  <div class="space-y-5 pb-2">
+    {#each MORE_GROUPS as group (group.title)}
+      <div>
+        <h3 class="px-1 pb-2 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-3">
+          {group.title}
+        </h3>
+        <div class="grid grid-cols-3 gap-2">
+          {#each group.items as item (item.href)}
+            {@const active = isActive(item.href, pathname)}
+            <a
+              href={item.href}
+              onclick={() => {
+                haptic('select');
+                moreOpen = false;
+              }}
+              class="flex flex-col items-center gap-2 rounded-2xl border px-2 py-4 text-center transition-colors {active
+                ? 'border-accent bg-accent-soft text-accent-ink'
+                : 'border-edge bg-panel-2 text-ink-2 hover:text-ink'}"
+            >
+              <svg
+                class="h-6 w-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                stroke-width="1.6"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d={item.icon} />
+              </svg>
+              <span class="text-xs font-medium">{item.label}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+    {/each}
+  </div>
+</BottomSheet>

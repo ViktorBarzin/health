@@ -1,53 +1,86 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { NAV_ITEMS, isActive } from '$lib/nav';
+  import { MORE_GROUPS, PRIMARY_TABS, isActive, tabIsActive } from '$lib/nav';
+  import { PRODUCT_NAME, PRODUCT_TAGLINE } from '$lib/brand';
 
-  interface Props {
-    onNavigate?: () => void;
-  }
-
-  let { onNavigate }: Props = $props();
+  // Desktop adaptation of the phone-first nav: the same five primary
+  // destinations as the bottom bar, with the "More" groups expanded inline.
+  let { onNavigate }: { onNavigate?: () => void } = $props();
+  const pathname = $derived($page.url.pathname);
 </script>
 
-<aside class="w-64 h-full bg-surface-900 border-r border-surface-700 flex flex-col">
-  <!-- Logo / Brand -->
-  <div class="flex items-center gap-3 px-6 py-5 border-b border-surface-700">
-    <div class="w-8 h-8 rounded-lg bg-primary-500 flex items-center justify-center">
-      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+<aside class="flex h-full w-64 flex-col border-r border-edge bg-panel">
+  <a href="/" onclick={onNavigate} class="flex items-center gap-3 px-5 py-5">
+    <div class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-on-accent">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
       </svg>
     </div>
-    <div>
-      <h1 class="text-sm font-semibold text-surface-100">Health Dashboard</h1>
-      <p class="text-xs text-surface-500">Apple Health Data</p>
+    <div class="leading-tight">
+      <div class="text-sm font-semibold tracking-tight text-ink">{PRODUCT_NAME}</div>
+      {#if PRODUCT_TAGLINE}<div class="text-[0.7rem] text-ink-3">{PRODUCT_TAGLINE}</div>{/if}
     </div>
-  </div>
+  </a>
 
-  <!-- Navigation -->
-  <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-    {#each NAV_ITEMS as item}
-      {@const active = isActive(item.href, $page.url.pathname)}
-      <a
-        href={item.href}
-        onclick={onNavigate}
-        class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
-               {active
-                 ? 'bg-primary-500/15 text-primary-400'
-                 : 'text-surface-400 hover:bg-surface-800 hover:text-surface-200'}"
-      >
-        <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d={item.icon} />
-        </svg>
-        <span>{item.label}</span>
-        {#if active}
-          <div class="ml-auto w-1.5 h-1.5 rounded-full bg-primary-400"></div>
-        {/if}
-      </a>
+  <nav class="flex-1 overflow-y-auto px-3 py-2">
+    <div class="space-y-1">
+      {#each PRIMARY_TABS as tab (tab.href)}
+        {@const active = tabIsActive(tab, pathname)}
+        <a
+          href={tab.href}
+          onclick={onNavigate}
+          class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors {active
+            ? 'bg-accent-soft text-accent-ink'
+            : 'text-ink-2 hover:bg-panel-2 hover:text-ink'}"
+        >
+          <svg
+            class="h-5 w-5 flex-shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            stroke-width={active ? 2 : 1.6}
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d={tab.icon} />
+          </svg>
+          <span>{tab.label}</span>
+          {#if active}<span class="ml-auto h-1.5 w-1.5 rounded-full bg-accent"></span>{/if}
+        </a>
+      {/each}
+    </div>
+
+    {#each MORE_GROUPS as group (group.title)}
+      <div class="mt-6">
+        <h3 class="px-3 pb-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-ink-3">
+          {group.title}
+        </h3>
+        <div class="space-y-0.5">
+          {#each group.items as item (item.href)}
+            {@const active = isActive(item.href, pathname)}
+            <a
+              href={item.href}
+              onclick={onNavigate}
+              class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {active
+                ? 'text-accent-ink'
+                : 'text-ink-3 hover:bg-panel-2 hover:text-ink'}"
+            >
+              <svg
+                class="h-[18px] w-[18px] flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d={item.icon} />
+              </svg>
+              <span>{item.label}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
     {/each}
   </nav>
 
-  <!-- Bottom section -->
-  <div class="px-4 py-3 border-t border-surface-700">
-    <p class="text-xs text-surface-600 text-center">v1.0.0</p>
+  <div class="border-t border-edge px-4 py-3">
+    <p class="text-center text-[0.7rem] text-ink-3">v1.0.0</p>
   </div>
 </aside>
