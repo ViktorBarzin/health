@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     # unprotected — fail closed, never plaintext.
     CONNECTION_ENCRYPTION_KEY: str | None = None
 
+    # Observability (perf-telemetry). Logs go to stdout in a logfmt-style
+    # key=value format and are scraped by the cluster's Loki — so structured,
+    # LogQL-parseable lines, no HTTP log shipper.
+    #
+    # Root log level for the app's own loggers (uvicorn's loggers are left
+    # untouched). One of CRITICAL/ERROR/WARNING/INFO/DEBUG.
+    LOG_LEVEL: str = "INFO"
+    # Any SQL statement whose execution exceeds this many milliseconds is logged
+    # once (on the ``app.slow_query`` logger) with its elapsed time and the
+    # (truncated) statement, so a slow query is visible in prod without turning
+    # on full SQL echo. Set <= 0 to log every statement (useful when debugging).
+    SLOW_QUERY_MS: int = 200
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

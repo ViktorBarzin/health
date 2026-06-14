@@ -543,6 +543,26 @@ Key details:
 - **Raw metrics**: Capped at 10K rows (configurable via `limit` param, max 100K)
 - **Workout listings**: JSONB `metadata_` column deferred via `defer()`
 
+## Observability (perf-telemetry)
+
+Lightweight, structured backend telemetry to stdout (scraped by the cluster's Loki — no HTTP log
+shipper, stdlib `logging` only), all in `core/observability.py`:
+- **Request timing** — `RequestTimingMiddleware` (a `BaseHTTPMiddleware`, added in `main.py` just
+  inside CORS) logs one **logfmt** line per request on the `app.request` logger
+  (`method=… path=… route=… status=… dur_ms=… user=…`), where `route` is the matched route
+  template (falls back to the raw path on a 404) and `user` mirrors `_identity_email` (the
+  `X-authentik-email` header or `DEV_AUTH_EMAIL`, **`-` when absent — no DB lookup, never raises**).
+  It also sets `Server-Timing: app;dur=<ms>` + `X-Process-Time-Ms` response headers so client
+  devtools see backend time. Logging never breaks a request (all emission is wrapped).
+- **Slow-query logging** — `register_slow_query_logging(engine)` attaches `before/after_cursor_execute`
+  events to the async engine's **`engine.sync_engine`** (a start time stashed on `conn.info`); any
+  statement over `SLOW_QUERY_MS` (default 200) is logged once on `app.slow_query` (warning) with the
+  elapsed ms + the **truncated** statement (bound params omitted). Idempotent (guarded by a marker).
+- **Config** — `configure_logging()` (idempotent: one stdout handler on each named logger,
+  `propagate=False` so uvicorn's root handler can't re-emit) at `LOG_LEVEL` (default INFO);
+  **uvicorn's own loggers are left untouched**. Both `configure_logging` + the slow-query listener
+  run at `main.py` import time. Knobs: `LOG_LEVEL`, `SLOW_QUERY_MS`. (YAGNI: no Prometheus/tracing.)
+
 ## Frontend Structure
 
 ```
@@ -646,6 +666,13 @@ CONNECTION_ENCRYPTION_KEY=...  # Fernet key (URL-safe base64 32-byte) encrypting
                        #   value on the app AND the sync CronJob. Comma-separated
                        #   list = key rotation (new,old). UNSET ⇒ Connections
                        #   disabled (API 503) — fail closed, never store plaintext.
+LOG_LEVEL=...          # Observability (perf-telemetry): level for the app's own
+                       #   loggers (app.request / app.slow_query). Default INFO;
+                       #   uvicorn's loggers are left untouched.
+SLOW_QUERY_MS=...      # Observability (perf-telemetry): any SQL statement slower
+                       #   than this many ms is logged once on app.slow_query with
+                       #   its elapsed time + truncated statement. Default 200;
+                       #   <=0 logs every statement.
 ```
 
 Set in `.env` file, loaded by docker-compose.
