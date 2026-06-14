@@ -18,6 +18,20 @@ export class ApiError extends Error {
   }
 }
 
+// On a 429 (rate limited — the request was NOT processed), back off and retry a
+// few times rather than letting a transient burst blank a page. Honours a
+// numeric `Retry-After`; otherwise exponential backoff with jitter. Safe for
+// mutations too: a 429 means the server rejected it before any side effect.
+const MAX_RETRIES = 3;
+
+function backoffMs(attempt: number, retryAfter: string | null): number {
+  const ra = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(ra) && ra >= 0) return Math.min(ra * 1000, 8000);
+  return Math.min(300 * 2 ** attempt, 4000) + Math.random() * 200;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${BASE_URL}${path}`;
 
@@ -26,11 +40,16 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
     ...options.headers,
   };
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
+  let response: Response;
+  for (let attempt = 0; ; attempt++) {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
+    if (response.status !== 429 || attempt >= MAX_RETRIES) break;
+    await sleep(backoffMs(attempt, response.headers.get('retry-after')));
+  }
 
   if (!response.ok) {
     let body: unknown;
