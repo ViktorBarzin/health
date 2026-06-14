@@ -1,296 +1,214 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  // Today — the action-first home (ADR-0008). Answers "what do I do now":
+  // start/resume the day's Session, what's left in the Budget, how recovered
+  // you are. The health-metrics dashboard moved to Progress.
+  import { goto } from '$app/navigation';
+  import { api, ApiError } from '$lib/api';
+  import { haptic } from '$lib/ui/haptics';
   import type {
-    DashboardSummary,
-    ActivityRingData,
-    MetricAvailable,
-    MetricResponse,
+    DiaryDay,
+    MacroTotals,
+    SessionDetail,
+    SessionSummary,
+    TodayRecommendationResponse,
   } from '$lib/types';
-  import { dateRange } from '$lib/stores/date-range.svelte';
-  import { DEFAULT_MAX_POINTS, downsampleSeries } from '$lib/dashboard';
-  import ActivityRings from '$lib/components/charts/ActivityRings.svelte';
-  import MetricCard from '$lib/components/dashboard/MetricCard.svelte';
-  import TodaySummary from '$lib/components/dashboard/TodaySummary.svelte';
-  import RecentWorkouts from '$lib/components/dashboard/RecentWorkouts.svelte';
-  import SleepSummary from '$lib/components/dashboard/SleepSummary.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import NumberReadout from '$lib/components/ui/NumberReadout.svelte';
   import ReadinessCard from '$lib/components/dashboard/ReadinessCard.svelte';
+  import BudgetCard from '$lib/components/nutrition/BudgetCard.svelte';
 
-  let summary = $state<DashboardSummary | null>(null);
-  let rings = $state<ActivityRingData | null>(null);
-  let stepsData = $state<MetricResponse | null>(null);
-  let energyData = $state<MetricResponse | null>(null);
-  let hrData = $state<MetricResponse | null>(null);
-  let exerciseData = $state<MetricResponse | null>(null);
+  const ZERO: MacroTotals = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
 
-  // Per-source loading flags so every card renders its OWN loading state and
-  // fills in independently as its request resolves — the page is interactive
-  // immediately and never blocks the whole dashboard on the slowest request.
-  let summaryLoading = $state(true);
-  let ringsLoading = $state(true);
-  let stepsLoading = $state(true);
-  let energyLoading = $state(true);
-  let hrLoading = $state(true);
-  let exerciseLoading = $state(true);
+  let sessions = $state<SessionSummary[] | null>(null);
+  let today = $state<TodayRecommendationResponse | null>(null);
+  let logged = $state<MacroTotals>(ZERO);
+  let recsLoading = $state(true);
+  let sessionsLoading = $state(true);
+  let starting = $state(false);
+  let startError = $state<string | null>(null);
 
-  let error = $state<string | null>(null);
-  let loadVersion = $state(0);
-  // Gate the first data load until the data-driven default window is resolved
-  // (so we don't fire a wasted fetch over the empty last-30-days first).
-  let windowReady = $state(false);
-  let initStarted = false;
+  const active = $derived(sessions?.find((s) => s.is_active && !s.ended_at) ?? null);
+  const recent = $derived((sessions ?? []).filter((s) => !s.is_active).slice(0, 4));
 
-  // Resolve the initial window from the user's latest available data, then let
-  // the reactive effect below drive the actual data load. Only the FIRST load
-  // is clamped; manual preset/range choices flip dateRange.defaultApplied and
-  // are respected. A failure here just falls through to the store's default.
-  async function resolveInitialWindow() {
-    if (dateRange.defaultApplied) {
-      windowReady = true;
-      return;
-    }
+  $effect(() => {
+    void load();
+  });
+
+  async function load() {
+    api
+      .get<SessionSummary[]>('/api/sessions')
+      .then((r) => (sessions = r))
+      .catch(() => (sessions = []))
+      .finally(() => (sessionsLoading = false));
+    api
+      .get<TodayRecommendationResponse>('/api/recommendations/today')
+      .then((r) => (today = r))
+      .catch(() => (today = null))
+      .finally(() => (recsLoading = false));
+    api
+      .get<DiaryDay>('/api/nutrition/diary')
+      .then((d) => (logged = d.total))
+      .catch(() => (logged = ZERO));
+  }
+
+  async function startToday() {
+    starting = true;
+    startError = null;
     try {
-      const metrics = await api.get<MetricAvailable[]>('/api/metrics/available');
-      dateRange.applyDefaultWindow(metrics);
-    } catch {
-      // Leave the store's default window in place.
-    } finally {
-      windowReady = true;
+      const session = await api.post<SessionDetail>('/api/recommendations/today/start');
+      haptic('success');
+      await goto(`/sessions/${session.id}`);
+    } catch (e) {
+      startError = e instanceof ApiError ? e.message : 'Could not start the session';
+      starting = false;
     }
   }
 
-  $effect(() => {
-    // One-shot: resolve the initial window exactly once on mount.
-    if (initStarted) return;
-    initStarted = true;
-    resolveInitialWindow();
-  });
-
-  $effect(() => {
-    // Touch the reactive deps so a range/resolution change re-loads.
-    const start = dateRange.startISO;
-    const end = dateRange.endISO;
-    const resolution = dateRange.resolution;
-    if (!windowReady) return;
-    loadDashboard(start, end, resolution);
-  });
-
-  function loadDashboard(start: string, end: string, resolution: string) {
-    error = null;
-    const version = ++loadVersion;
-
-    // Reset per-source state + loading so stale data from a previous range
-    // doesn't persist while the new range's requests are in flight.
-    summary = null;
-    rings = null;
-    stepsData = null;
-    energyData = null;
-    hrData = null;
-    exerciseData = null;
-    summaryLoading = true;
-    ringsLoading = true;
-    stepsLoading = true;
-    energyLoading = true;
-    hrLoading = true;
-    exerciseLoading = true;
-
-    const fresh = () => version === loadVersion;
-    const metric = (type: string) =>
-      api.get<MetricResponse>(
-        `/api/metrics/${type}?start=${start}&end=${end}&resolution=${resolution}`,
-      );
-
-    // Fire ALL requests concurrently (one batch) and render each card as its own
-    // response arrives — total latency ≈ the slowest single request, not the sum
-    // of three serial round-trips. Each .then/.catch is version-guarded so a fast
-    // range change can't render stale data, and each settles its own loading flag.
-    const summaryP = api
-      .get<DashboardSummary>(`/api/dashboard/summary?start=${start}&end=${end}`)
-      .then((res) => { if (fresh()) summary = res; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) summaryLoading = false; });
-
-    const ringsP = api
-      .get<ActivityRingData[]>(`/api/activity/rings?start=${start}&end=${end}`)
-      .then((res) => { if (fresh() && res.length > 0) rings = res[0]; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) ringsLoading = false; });
-
-    const stepsP = metric('StepCount')
-      .then((res) => { if (fresh()) stepsData = res; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) stepsLoading = false; });
-
-    const energyP = metric('ActiveEnergyBurned')
-      .then((res) => { if (fresh()) energyData = res; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) energyLoading = false; });
-
-    const hrP = metric('HeartRate')
-      .then((res) => { if (fresh()) hrData = res; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) hrLoading = false; });
-
-    const exerciseP = metric('AppleExerciseTime')
-      .then((res) => { if (fresh()) exerciseData = res; })
-      .catch(() => {})
-      .finally(() => { if (fresh()) exerciseLoading = false; });
-
-    // Surface an error banner only when EVERY request failed (otherwise the
-    // cards that loaded stand on their own).
-    Promise.allSettled([summaryP, ringsP, stepsP, energyP, hrP, exerciseP]).then(
-      () => {
-        if (!fresh()) return;
-        const anyData =
-          summary !== null ||
-          rings !== null ||
-          stepsData !== null ||
-          energyData !== null ||
-          hrData !== null ||
-          exerciseData !== null;
-        if (!anyData) error = 'Failed to load dashboard data';
-      },
-    );
+  function greeting(): string {
+    const h = new Date().getHours();
+    if (h < 5) return 'Late night';
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
   }
 
-  // Sparklines: cap the points actually drawn so a wide window can't flood the
-  // renderer (day-resolution rollups are already small; this protects `raw`/all).
-  let stepsSparkline = $derived(
-    downsampleSeries(stepsData?.data ?? [], DEFAULT_MAX_POINTS).map((d) => d.value),
-  );
-  let energySparkline = $derived(
-    downsampleSeries(energyData?.data ?? [], DEFAULT_MAX_POINTS).map((d) => d.value),
-  );
-  let hrSparkline = $derived(
-    downsampleSeries(hrData?.data ?? [], DEFAULT_MAX_POINTS).map((d) => d.value),
-  );
-  let exerciseSparkline = $derived(
-    downsampleSeries(exerciseData?.data ?? [], DEFAULT_MAX_POINTS).map((d) => d.value),
-  );
-
-  // Derive aggregate values from metrics data (updates with date range)
-  // falling back to summary data for fields only the summary endpoint provides.
-  let effectiveSummary = $derived<DashboardSummary>({
-    steps_today: stepsData?.stats.total ?? summary?.steps_today ?? null,
-    active_energy_today: energyData?.stats.total ?? summary?.active_energy_today ?? null,
-    exercise_minutes_today: exerciseData?.stats.total ?? summary?.exercise_minutes_today ?? null,
-    stand_hours_today: summary?.stand_hours_today ?? null,
-    resting_hr: summary?.resting_hr ?? null,
-    hrv: summary?.hrv ?? null,
-    spo2: summary?.spo2 ?? null,
-    sleep_hours_last_night: summary?.sleep_hours_last_night ?? null,
+  const todayLabel = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
   });
+
+  function planTitle(t: TodayRecommendationResponse): string {
+    return t.source === 'program' && t.program ? t.program.day_name : 'Freestyle session';
+  }
 </script>
 
-<div class="space-y-6">
-  {#if error}
-    <div class="rounded-xl bg-red-900/20 border border-red-700/50 p-4">
-      <p class="text-red-400 text-sm">{error}</p>
-    </div>
-  {/if}
+<div class="mx-auto max-w-2xl space-y-5">
+  <header class="pt-1">
+    <p class="text-sm text-ink-3">{todayLabel}</p>
+    <h1 class="text-2xl font-semibold tracking-tight text-ink">{greeting()}</h1>
+  </header>
 
-  <!-- Top row: Activity Rings + Today Summary -->
-  <div class="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-6">
-    <!-- Activity Rings -->
-    <div class="rounded-xl bg-surface-800 border border-surface-700/50 p-6 flex items-center justify-center">
-      {#if ringsLoading}
-        <div class="animate-pulse w-[140px] h-[140px] rounded-full bg-surface-700"></div>
-      {:else if rings}
-        <ActivityRings data={rings} size={140} />
-      {:else}
-        <div class="text-center py-6">
-          <div class="w-[140px] h-[140px] rounded-full border-4 border-surface-700 flex items-center justify-center mx-auto">
-            <span class="text-surface-500 text-sm">No data</span>
+  <!-- Primary action: resume an in-progress Session, else start today's. -->
+  {#if sessionsLoading}
+    <Card class="h-40 animate-pulse" padded={false}><span class="sr-only">Loading</span></Card>
+  {:else if active}
+    <Card class="border-accent/40 bg-gradient-to-br from-accent-soft to-transparent">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wider text-accent-ink"
+          >
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"></span> In progress
+          </span>
+          <div class="mt-3 flex items-end gap-6">
+            <NumberReadout value={active.set_count} label="Sets" size="lg" />
+            <NumberReadout value={Math.round(active.total_volume_kg)} unit="kg" label="Volume" size="lg" />
           </div>
         </div>
+      </div>
+      <Button href={`/sessions/${active.id}`} variant="accent" size="lg" full feedback="select">
+        Resume session
+      </Button>
+    </Card>
+  {:else}
+    <Card>
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-3">
+            Today's session
+          </p>
+          {#if recsLoading}
+            <div class="mt-1 h-7 w-40 animate-pulse rounded bg-panel-2"></div>
+          {:else if today}
+            <h2 class="truncate text-xl font-semibold text-ink">{planTitle(today)}</h2>
+            <p class="mt-0.5 text-sm text-ink-2">
+              {today.exercises.length} exercise{today.exercises.length === 1 ? '' : 's'}
+              {#if today.source === 'program' && today.program}
+                · Week {today.program.week}/{today.program.total_weeks}{today.program.is_deload
+                  ? ' · deload'
+                  : ''}
+              {/if}
+            </p>
+          {:else}
+            <h2 class="text-xl font-semibold text-ink">Start training</h2>
+            <p class="mt-0.5 text-sm text-ink-2">Log a fresh session.</p>
+          {/if}
+        </div>
+        <span class="grid h-12 w-12 flex-shrink-0 place-items-center rounded-2xl bg-accent text-on-accent">
+          <svg class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+          </svg>
+        </span>
+      </div>
+
+      {#if today && today.exercises.length}
+        <ul class="mb-4 space-y-1.5">
+          {#each today.exercises.slice(0, 4) as ex (ex.exercise_id)}
+            <li class="flex items-center justify-between gap-3 text-sm">
+              <span class="truncate text-ink-2">{ex.name}</span>
+              <span class="readout flex-shrink-0 text-xs text-ink-3"
+                >{ex.target_sets}×{ex.target_reps}{#if ex.target_weight_kg}
+                  · {Math.round(ex.target_weight_kg)}kg{/if}</span
+              >
+            </li>
+          {/each}
+          {#if today.exercises.length > 4}
+            <li class="text-xs text-ink-3">+{today.exercises.length - 4} more</li>
+          {/if}
+        </ul>
       {/if}
+
+      {#if startError}
+        <p class="mb-3 text-sm text-danger">{startError}</p>
+      {/if}
+
+      <div class="flex gap-2">
+        <Button onclick={startToday} variant="accent" size="lg" full disabled={starting} feedback={null}>
+          {starting ? 'Starting…' : 'Start training'}
+        </Button>
+        <Button href="/sessions" variant="outline" size="lg">All</Button>
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Recovery + fuel at a glance. -->
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <ReadinessCard />
+    <BudgetCard {logged} />
+  </div>
+
+  <!-- Recent sessions. -->
+  <section>
+    <div class="mb-2 flex items-center justify-between px-1">
+      <h2 class="text-sm font-semibold text-ink">Recent sessions</h2>
+      <a href="/sessions" class="text-xs font-medium text-accent-ink">View all</a>
     </div>
-
-    <!-- Today summary (vital signs gate on the summary request; activity values
-         fill from the metric requests as they arrive). -->
-    <TodaySummary summary={effectiveSummary} loading={summaryLoading} />
-  </div>
-
-  <!-- Metric cards with sparklines — each fills in independently. -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-    {#if stepsLoading}
-      <div class="rounded-xl bg-surface-800 p-4 border border-surface-700/50 animate-pulse">
-        <div class="flex items-center gap-2 mb-3"><div class="w-8 h-8 rounded-lg bg-surface-700"></div><div class="h-4 w-20 bg-surface-700 rounded"></div></div>
-        <div class="h-8 w-24 bg-surface-700 rounded mb-2"></div>
-        <div class="h-6 w-full bg-surface-700 rounded mt-3"></div>
-      </div>
+    {#if sessionsLoading}
+      <Card class="h-20 animate-pulse" padded={false}></Card>
+    {:else if recent.length === 0}
+      <Card class="text-center">
+        <p class="text-sm text-ink-3">No sessions yet. Start your first above.</p>
+      </Card>
     {:else}
-      <MetricCard
-        title="Steps"
-        value={effectiveSummary.steps_today}
-        unit="steps"
-        trend={stepsData?.stats.trend_pct ?? null}
-        sparklineData={stepsSparkline}
-        icon="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-        color="#10b981"
-      />
-    {/if}
-
-    {#if energyLoading}
-      <div class="rounded-xl bg-surface-800 p-4 border border-surface-700/50 animate-pulse">
-        <div class="flex items-center gap-2 mb-3"><div class="w-8 h-8 rounded-lg bg-surface-700"></div><div class="h-4 w-20 bg-surface-700 rounded"></div></div>
-        <div class="h-8 w-24 bg-surface-700 rounded mb-2"></div>
-        <div class="h-6 w-full bg-surface-700 rounded mt-3"></div>
+      <div class="space-y-2">
+        {#each recent as s (s.id)}
+          <Card href={`/sessions/${s.id}`} class="flex items-center justify-between gap-3 py-3">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-ink">
+                {new Date(s.started_at).toLocaleDateString('en-US', {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </p>
+              <p class="text-xs text-ink-3">{s.set_count} sets</p>
+            </div>
+            <span class="readout flex-shrink-0 text-sm text-ink-2">{Math.round(s.total_volume_kg)} kg</span>
+          </Card>
+        {/each}
       </div>
-    {:else}
-      <MetricCard
-        title="Active Energy"
-        value={effectiveSummary.active_energy_today != null ? Math.round(effectiveSummary.active_energy_today) : null}
-        unit="kcal"
-        trend={energyData?.stats.trend_pct ?? null}
-        sparklineData={energySparkline}
-        icon="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"
-        color="#f59e0b"
-      />
     {/if}
-
-    {#if hrLoading}
-      <div class="rounded-xl bg-surface-800 p-4 border border-surface-700/50 animate-pulse">
-        <div class="flex items-center gap-2 mb-3"><div class="w-8 h-8 rounded-lg bg-surface-700"></div><div class="h-4 w-20 bg-surface-700 rounded"></div></div>
-        <div class="h-8 w-24 bg-surface-700 rounded mb-2"></div>
-        <div class="h-6 w-full bg-surface-700 rounded mt-3"></div>
-      </div>
-    {:else}
-      <MetricCard
-        title="Heart Rate"
-        value={hrData?.stats.avg != null ? Math.round(hrData.stats.avg) : (effectiveSummary.resting_hr != null ? Math.round(effectiveSummary.resting_hr) : null)}
-        unit="bpm"
-        trend={hrData?.stats.trend_pct ?? null}
-        sparklineData={hrSparkline}
-        icon="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
-        color="#ef4444"
-      />
-    {/if}
-
-    {#if exerciseLoading}
-      <div class="rounded-xl bg-surface-800 p-4 border border-surface-700/50 animate-pulse">
-        <div class="flex items-center gap-2 mb-3"><div class="w-8 h-8 rounded-lg bg-surface-700"></div><div class="h-4 w-20 bg-surface-700 rounded"></div></div>
-        <div class="h-8 w-24 bg-surface-700 rounded mb-2"></div>
-        <div class="h-6 w-full bg-surface-700 rounded mt-3"></div>
-      </div>
-    {:else}
-      <MetricCard
-        title="Exercise"
-        value={effectiveSummary.exercise_minutes_today != null ? Math.round(effectiveSummary.exercise_minutes_today) : null}
-        unit="min"
-        trend={exerciseData?.stats.trend_pct ?? null}
-        sparklineData={exerciseSparkline}
-        icon="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-        color="#22c55e"
-      />
-    {/if}
-  </div>
-
-  <!-- Bottom row: Recent Workouts + Readiness/Sleep insights -->
-  <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-    <RecentWorkouts start={dateRange.startISO} end={dateRange.endISO} />
-    <div class="space-y-4">
-      <ReadinessCard />
-      <SleepSummary summary={effectiveSummary} loading={summaryLoading} />
-    </div>
-  </div>
+  </section>
 </div>
