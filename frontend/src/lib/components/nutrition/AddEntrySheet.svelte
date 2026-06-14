@@ -4,6 +4,7 @@
   import CustomFoodForm from '$lib/components/nutrition/CustomFoodForm.svelte';
   import RecipeBuilder from '$lib/components/nutrition/RecipeBuilder.svelte';
   import { entryMacros, formatMacro, formatServing } from '$lib/nutrition';
+  import { haptic } from '$lib/ui/haptics';
   import type { DiaryEntry, Food, Meal, Recipe } from '$lib/types';
 
   // A mobile bottom-sheet for adding (or editing) a Diary Entry. Several ways to
@@ -198,6 +199,7 @@
           quantity,
         });
       }
+      haptic('success'); // tactile confirm the Food was logged
       onsaved();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to save entry';
