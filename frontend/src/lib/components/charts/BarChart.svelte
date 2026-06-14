@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Chart, registerables } from 'chart.js';
   import type { ChartConfiguration } from 'chart.js';
+  import { DEFAULT_MAX_POINTS, downsampleSeries } from '$lib/dashboard';
 
   Chart.register(...registerables);
 
@@ -33,9 +34,16 @@
       map.set(day, (map.get(day) ?? 0) + p.value);
     }
     const sorted = [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    // Cap the bars actually drawn so a multi-year all-time window can't flood the
+    // renderer (#51). Daily aggregation already bounds most windows; this guards
+    // the wide ones, keeping the first/last day + shape.
+    const capped = downsampleSeries(
+      sorted.map(([time, value]) => ({ time, value })),
+      DEFAULT_MAX_POINTS,
+    );
     return {
-      labels: sorted.map(([d]) => d),
-      values: sorted.map(([, v]) => v),
+      labels: capped.map((p) => p.time),
+      values: capped.map((p) => p.value),
     };
   }
 
