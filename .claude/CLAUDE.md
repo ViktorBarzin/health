@@ -563,6 +563,14 @@ read. All in `services/rollup.py` (the clean, unit-tested home for the recompute
   reuses the endpoints' existing `_CUMULATIVE_METRICS`/`_SUM_METRICS` split: cumulative → Σsum,
   else Σsum/Σcount. **`raw` resolution still reads `health_records`** directly (capped). The
   summary's **latest-value** (`DISTINCT ON`) + **sleep** parts stay on the raw tables (already fast).
+  The **available-metrics list** (`GET /api/metrics/available` → `_list_health_metrics`) also reads
+  the rollup (`fetch_available_health_metrics`): Σ`count` (exact) + `max(day)` + a representative
+  `unit`, replacing an 8 s `GROUP BY metric_type` over 6.6M raw rows (on the dashboard first-load
+  critical path — #51 clamps the default window from its `latest_time`). **`latest_time` is now
+  day-granular** for health metrics (`max(day)` at midnight UTC, not the reading instant) — all its
+  consumers (display + the day-granular default-window clamp) only need day precision. The
+  **category_records portion stays query-time** (ADR-0009: ~45 ms even at a generous 200K rows;
+  it never showed up as a bottleneck).
 - **Backfill / rebuild** (`backfill_all`, `python -m app.services.rollup`, run from
   `entrypoint.sh`) is one `GROUP BY user_id, metric_type, date_trunc('day', time)`. **Gated**: it
   skips immediately when `metric_daily` is already populated (a `LIMIT 1` probe), so a normal pod

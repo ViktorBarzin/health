@@ -299,3 +299,90 @@ async def test_dashboard_summary_default_today_uses_rollup(client, db_session) -
     resp = await client.get("/api/dashboard/summary")
     assert resp.status_code == 200
     assert resp.json()["steps_today"] == 4242.0
+
+
+@pytest.mark.asyncio
+async def test_available_health_metrics_equal_raw_group_by(client, db_session) -> None:
+    """/api/metrics/available health portion is served from metric_daily (ADR-0009).
+
+    The counts must EQUAL the old raw ``GROUP BY metric_type`` over health_records
+    (exact), and the latest is now **day-granular** — it equals the UTC *date* of the
+    raw ``max(time)`` (midnight-UTC). This pins the same rollup==raw discipline as the
+    series endpoints, with the documented day-grain for ``latest_time``.
+    """
+    db = db_session
+    user = await _user(db)
+    # Several metrics, multiple readings per day across days, with a known
+    # last-reading instant mid-day so the day-granular latest is observable.
+    rng = random.Random("available")
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    for day in range(25):
+        for metric in ("HeartRate", "StepCount", "RestingHeartRate"):
+            for j in range(rng.randint(1, 3)):
+                ts = start + timedelta(days=day, hours=rng.randint(0, 23), minutes=j)
+                db.add(HealthRecord(time=ts, user_id=user.id, metric_type=metric, value=50.0 + j, unit="u"))
+    # A clearly-latest reading mid-day on the final day for HeartRate.
+    last_instant = datetime(2024, 1, 25, 14, 37, tzinfo=timezone.utc)
+    db.add(HealthRecord(time=last_instant, user_id=user.id, metric_type="HeartRate", value=99.0, unit="u"))
+    await db.commit()
+
+    # OLD raw answer: GROUP BY metric_type over health_records (count + max(time)).
+    raw_rows = (
+        await db.execute(
+            text(
+                "SELECT metric_type, count(*) c, max(time) latest "
+                "FROM health_records WHERE user_id=:u GROUP BY metric_type"
+            ),
+            {"u": user.id},
+        )
+    ).all()
+    raw = {r.metric_type: (r.c, r.latest) for r in raw_rows}
+
+    await rollup.backfill_all(db)
+    await db.commit()
+
+    client.set_user(user)
+    resp = await client.get("/api/metrics/available")
+    assert resp.status_code == 200
+    got = {m["metric_type"]: m for m in resp.json() if m["metric_type"] in raw}
+    assert set(got) == set(raw)  # every health metric is listed
+    for metric, (raw_count, raw_latest) in raw.items():
+        # count is EXACT.
+        assert got[metric]["count"] == raw_count, metric
+        # latest_time is day-granular: the UTC date of the raw max(time), midnight.
+        got_dt = datetime.fromisoformat(got[metric]["latest_time"])
+        assert got_dt.date() == raw_latest.astimezone(timezone.utc).date(), metric
+        assert (got_dt.hour, got_dt.minute, got_dt.second) == (0, 0, 0), metric
+    # The mid-day final HeartRate reading collapses to that day at midnight.
+    assert datetime.fromisoformat(got["HeartRate"]["latest_time"]).date() == last_instant.date()
+
+
+@pytest.mark.asyncio
+async def test_available_metrics_still_includes_category(client, db_session) -> None:
+    """The combined endpoint still lists category metrics (kept query-time per ADR)."""
+    from app.models.category_record import CategoryRecord
+
+    db = db_session
+    user = await _user(db)
+    night = datetime(2024, 2, 1, 23, 0, tzinfo=timezone.utc)
+    db.add(HealthRecord(time=night, user_id=user.id, metric_type="HeartRate", value=60.0, unit="u"))
+    db.add(
+        CategoryRecord(
+            time=night,
+            user_id=user.id,
+            category_type="SleepAnalysis",
+            value="HKCategoryValueSleepAnalysisAsleepCore",
+            value_label="Asleep Core",
+            end_time=night + timedelta(hours=7),
+        )
+    )
+    await db.commit()
+    await rollup.backfill_all(db)
+    await db.commit()
+
+    client.set_user(user)
+    resp = await client.get("/api/metrics/available")
+    assert resp.status_code == 200
+    types = {m["metric_type"] for m in resp.json()}
+    assert "HeartRate" in types       # health, from the rollup
+    assert "SleepAnalysis" in types   # category, still from health/category raw

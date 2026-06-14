@@ -1,6 +1,6 @@
 """Health metrics API routes."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
@@ -128,26 +128,31 @@ async def _list_health_metrics(
     user_id: int,
     db: AsyncSession,
 ) -> list[MetricAvailable]:
-    stmt = (
-        select(
-            HealthRecord.metric_type,
-            func.max(HealthRecord.unit).label("unit"),
-            func.count().label("count"),
-            func.max(HealthRecord.time).label("latest_time"),
-        )
-        .where(HealthRecord.user_id == user_id)
-        .group_by(HealthRecord.metric_type)
-        .order_by(HealthRecord.metric_type)
-    )
-    result = await db.execute(stmt)
+    """List the user's health metrics + aggregates from the daily rollup (ADR-0009).
+
+    Reads ``metric_daily`` (the user's ~thousands of rollup rows) instead of a
+    ``GROUP BY metric_type`` over the whole ``health_records`` table (measured 8 s
+    over 6.6M rows on prod, and on the dashboard first-load critical path). ``count``
+    is exact (Σ daily counts == the raw reading count); ``latest_time`` is
+    **day-granular** for health metrics now — it's ``max(day)`` at midnight UTC, not
+    the original reading instant — which is all its consumers need (display + the
+    day-granular default-window clamp in `lib/dashboard.ts`).
+    """
+    rows = await rollup.fetch_available_health_metrics(db, user_id=user_id)
     return [
         MetricAvailable(
-            metric_type=row.metric_type,
-            unit=row.unit or "",
-            count=row.count,
-            latest_time=row.latest_time,
+            metric_type=row["metric_type"],
+            unit=row["unit"] or "",
+            count=row["count"],
+            # The rollup's finest grain is the day; surface it as a midnight-UTC
+            # instant so the schema's datetime field round-trips cleanly.
+            latest_time=(
+                datetime.combine(row["latest_day"], time.min, tzinfo=timezone.utc)
+                if row["latest_day"] is not None
+                else None
+            ),
         )
-        for row in result.all()
+        for row in rows
     ]
 
 

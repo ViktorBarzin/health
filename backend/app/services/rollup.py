@@ -45,8 +45,10 @@ from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import timezone as _tz
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.metric_daily import MetricDaily
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +317,49 @@ async def fetch_rollup_series(
             "min": float(r.min),
             "max": float(r.max),
             "count": int(r.count),
+        }
+        for r in rows
+    ]
+
+
+async def fetch_available_health_metrics(
+    session: AsyncSession, *, user_id: int
+) -> list[dict]:
+    """List a user's health metrics with their aggregates, from ``metric_daily``.
+
+    The fast replacement for the old ``GROUP BY metric_type`` over the whole
+    ``health_records`` table (measured 8 s over 6.6M rows on prod; this reads only
+    the user's ~thousands of rollup rows). Per (user, metric):
+
+    * ``count``      — Σ ``metric_daily.count`` == the raw reading count (exact).
+    * ``latest_day`` — ``max(metric_daily.day)`` (a ``date``). This is the
+      **day-granular** latest: the rollup keeps daily buckets, so the finest "last
+      reading" it can report is the day, not the original timestamp instant. The
+      caller (the available-metrics endpoint) uses it for display and the
+      day-granular default-window clamp, both of which only need day precision.
+    * ``unit``       — a representative ``max(metric_daily.unit)`` (the same cheap
+      pick the rollup itself stores and the old query used).
+
+    Returns dicts ``{metric_type, count, latest_day, unit}`` ordered by metric_type.
+    """
+    stmt = (
+        select(
+            MetricDaily.metric_type,
+            func.sum(MetricDaily.count).label("count"),
+            func.max(MetricDaily.day).label("latest_day"),
+            func.max(MetricDaily.unit).label("unit"),
+        )
+        .where(MetricDaily.user_id == user_id)
+        .group_by(MetricDaily.metric_type)
+        .order_by(MetricDaily.metric_type)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "metric_type": r.metric_type,
+            "count": int(r.count),
+            "latest_day": r.latest_day,
+            "unit": r.unit,
         }
         for r in rows
     ]
