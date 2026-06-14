@@ -99,19 +99,28 @@ def _bucket_interval(resolution: Resolution) -> str:
 
 def _rollup_day_bounds(
     start: datetime | None, end: datetime | None
-) -> tuple["date | None", "date | None"]:
-    """Map a time-window to inclusive UTC date bounds for the daily rollup.
+) -> tuple[date | None, date | None]:
+    """Map a request time-window to inclusive WHOLE-UTC-DAY bounds for the rollup.
 
-    The rollup serves whole-day buckets keyed by the UTC calendar day. ``start`` is
-    floored to its UTC day; ``end`` uses the same end-of-day adjustment the raw path
-    applied (a midnight ``end`` extends to the next day), so the inclusive last day
-    is the day just before that exclusive instant — i.e. the ``end`` day itself.
+    **By design, day/week/month resolutions operate on whole UTC days** — a partial
+    day is meaningless at day-and-coarser granularity (you can't show "half of
+    Tuesday" on a daily/weekly/monthly chart), so a non-midnight ``start``/``end`` is
+    floored/ceilinged to its enclosing UTC day rather than truncating a day's bucket
+    mid-stream. ``start`` floors to its UTC day (the whole day is included);
+    ``end`` ceilings to its UTC day (the whole ``end`` day is included). This is a
+    deliberate, documented contract for the aggregated resolutions and the only place
+    the day grain is decided.
+
+    **`raw` resolution is unaffected and stays exact-instant** — it never calls this;
+    it filters ``health_records`` on the precise ``time >= start`` / ``time <= end``
+    instants (see ``_fetch_health_metric``'s ``base_filter``).
     """
-    start_date = _ensure_utc(start).astimezone(timezone.utc).date() if start is not None else None
-    end_date: date | None = None
-    if end is not None:
-        exclusive = _end_of_day(end).astimezone(timezone.utc)
-        end_date = (exclusive - timedelta(microseconds=1)).date()
+    start_date = (
+        _ensure_utc(start).astimezone(timezone.utc).date() if start is not None else None
+    )
+    end_date = (
+        _ensure_utc(end).astimezone(timezone.utc).date() if end is not None else None
+    )
     return start_date, end_date
 
 

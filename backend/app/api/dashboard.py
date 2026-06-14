@@ -90,13 +90,16 @@ async def get_dashboard_summary(
     #    rollup (ADR-0009): sum the per-day `sum` over the day range instead of
     #    scanning raw health_records. Σ over whole-day buckets == the raw Σ for the
     #    same days (StepCount/ActiveEnergyBurned are cumulative). 1 query.
+    #    Bounds are WHOLE UTC DAYS by design (the same day grain the activity-summary
+    #    filter above uses, and metrics._rollup_day_bounds): a daily summary card has
+    #    no concept of a partial day, so `start`/`end` floor/ceiling to their UTC day.
     sum_filters: list = [
         MetricDaily.user_id == user.id,
         MetricDaily.metric_type.in_(_SUM_METRICS),
         MetricDaily.day >= range_start.date(),
     ]
-    if range_end is not None:
-        sum_filters.append(MetricDaily.day <= (range_end - timedelta(microseconds=1)).date())
+    if end is not None:
+        sum_filters.append(MetricDaily.day <= end.date())
 
     sums_stmt = select(
         func.sum(

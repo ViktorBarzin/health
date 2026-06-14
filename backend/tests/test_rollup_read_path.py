@@ -191,6 +191,69 @@ async def test_raw_resolution_still_reads_health_records(client, db_session) -> 
 
 
 @pytest.mark.asyncio
+async def test_metric_day_resolution_floors_nonmidnight_start_to_whole_utc_day(
+    client, db_session
+) -> None:
+    """Day/week/month resolutions operate on WHOLE UTC days BY DESIGN (ADR-0009).
+
+    A non-midnight `start` floors to its enclosing UTC day, so the boundary day is
+    returned in full — NOT truncated to only the readings after the `start` instant
+    (which would be a meaningless partial day at day granularity, and the latent
+    over/under-count the review flagged). This pins that contract: both the 06:00
+    (before start) and 18:00 (after start) readings on the boundary day count.
+    """
+    db = db_session
+    user = await _user(db)
+    boundary = datetime(2024, 1, 10, tzinfo=timezone.utc)
+    before = boundary.replace(hour=6)   # 06:00 — BEFORE the 15:30 start instant
+    after = boundary.replace(hour=18)   # 18:00 — after it
+    next_day = datetime(2024, 1, 11, 9, 0, tzinfo=timezone.utc)
+    for ts, v in ((before, 1000.0), (after, 1500.0), (next_day, 700.0)):
+        db.add(HealthRecord(time=ts, user_id=user.id, metric_type="StepCount", value=v, unit="count"))
+    await db.commit()
+    await rollup.backfill_all(db)
+    await db.commit()
+
+    client.set_user(user)
+    resp = await client.get(
+        "/api/metrics/StepCount",
+        params={"resolution": "day", "start": "2024-01-10T15:30:00Z"},
+    )
+    assert resp.status_code == 200
+    by_day = {p["time"][:10]: p["value"] for p in resp.json()["data"]}
+    # Day 10 is returned IN FULL (1000 + 1500), not just the post-15:30 reading.
+    assert by_day["2024-01-10"] == 2500.0
+    assert by_day["2024-01-11"] == 700.0
+
+
+@pytest.mark.asyncio
+async def test_metric_day_resolution_ceilings_nonmidnight_end_to_whole_utc_day(
+    client, db_session
+) -> None:
+    """Symmetric to the start case: a non-midnight `end` includes its whole UTC day."""
+    db = db_session
+    user = await _user(db)
+    end_day = datetime(2024, 3, 5, tzinfo=timezone.utc)
+    early = end_day.replace(hour=2)     # 02:00 — before the 10:00 end instant
+    late = end_day.replace(hour=22)     # 22:00 — AFTER the end instant
+    for ts, v in ((early, 800.0), (late, 1200.0)):
+        db.add(HealthRecord(time=ts, user_id=user.id, metric_type="StepCount", value=v, unit="count"))
+    await db.commit()
+    await rollup.backfill_all(db)
+    await db.commit()
+
+    client.set_user(user)
+    resp = await client.get(
+        "/api/metrics/StepCount",
+        params={"resolution": "day", "end": "2024-03-05T10:00:00Z"},
+    )
+    assert resp.status_code == 200
+    by_day = {p["time"][:10]: p["value"] for p in resp.json()["data"]}
+    # The whole end day is included (800 + 1200), not just the pre-10:00 reading.
+    assert by_day["2024-03-05"] == 2000.0
+
+
+@pytest.mark.asyncio
 async def test_dashboard_summary_sums_equal_raw(client, db_session) -> None:
     db = db_session
     user = await _user(db)

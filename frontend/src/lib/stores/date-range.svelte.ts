@@ -59,9 +59,6 @@ function createDateRangeStore() {
     get activePreset() { return activePreset; },
     get startISO() { return start.toISOString().slice(0, 10); },
     get endISO() { return end.toISOString().slice(0, 10); },
-    get queryParams() {
-      return `start=${start.toISOString()}&end=${end.toISOString()}&resolution=${resolution}`;
-    },
     setRange,
     setResolution,
     setPreset,
