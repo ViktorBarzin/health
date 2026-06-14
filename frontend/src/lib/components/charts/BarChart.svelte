@@ -2,6 +2,7 @@
   import { Chart, registerables } from 'chart.js';
   import type { ChartConfiguration } from 'chart.js';
   import { DEFAULT_MAX_POINTS, downsampleSeries } from '$lib/dashboard';
+  import { chartTheme } from '$lib/ui/chart-theme';
 
   Chart.register(...registerables);
 
@@ -49,6 +50,7 @@
 
   function buildConfig(): ChartConfiguration {
     const { labels, values } = aggregateDaily(data);
+    const t = chartTheme();
 
     return {
       type: 'bar',
@@ -71,10 +73,10 @@
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1e293b',
-            titleColor: '#f1f5f9',
-            bodyColor: '#94a3b8',
-            borderColor: '#334155',
+            backgroundColor: t.tooltipBg,
+            titleColor: t.tooltipTitle,
+            bodyColor: t.tooltipBody,
+            borderColor: t.border,
             borderWidth: 1,
             padding: 10,
             callbacks: {
@@ -95,10 +97,10 @@
           x: {
             grid: {
               display: showGrid,
-              color: '#47556922',
+              color: t.grid,
             },
             ticks: {
-              color: '#64748b',
+              color: t.tick,
               maxTicksLimit: 8,
               callback(value) {
                 const raw = this.getLabelForValue(value as number);
@@ -107,15 +109,15 @@
                 return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
               },
             },
-            border: { color: '#334155' },
+            border: { color: t.border },
           },
           y: {
             grid: {
               display: showGrid,
-              color: '#47556922',
+              color: t.grid,
             },
-            ticks: { color: '#64748b' },
-            border: { color: '#334155' },
+            ticks: { color: t.tick },
+            border: { color: t.border },
           },
         },
       },
