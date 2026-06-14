@@ -21,6 +21,14 @@ python -m app.services.seed_principles || echo "WARN: principles KB seed failed;
 # boot and corrections flow through. Best-effort: a seed failure must not block.
 python -m app.services.seed_foods || echo "WARN: generic foods seed failed; continuing"
 
+# Populate the daily metric rollups the dashboard/metrics read path uses (ADR-0009).
+# GATED: this skips immediately when metric_daily is already populated, so a normal
+# pod restart does NOT re-scan the ~6.6M-row health_records table — only the first
+# deploy after the migration pays the one-time GROUP BY. Force a full rebuild for
+# recovery with `python -m app.services.rollup --rebuild`. Best-effort: a failure
+# must not block boot (the read path degrades, it doesn't break).
+python -m app.services.rollup || echo "WARN: metric rollup backfill failed; continuing"
+
 # Start backend in background
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 

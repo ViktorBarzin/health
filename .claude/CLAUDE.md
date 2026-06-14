@@ -63,6 +63,7 @@ backend/app/
 ├── services/
 │   ├── xml_parser.py  # Producer-consumer XML parsing pipeline
 │   ├── dedup.py       # Bulk insert with COPY + ON CONFLICT DO NOTHING
+│   ├── rollup.py      # Daily metric rollups (ADR-0009): backfill (gated) + targeted post-ingest recompute + day/week/month read helper
 │   ├── seed_exercises.py  # Idempotent Exercise-library seed from vendored free-exercise-db
 │   ├── effort.py      # Pure Effort RIR↔RPE mapping (one-tap chip ↔ stored RPE-equivalent)
 │   ├── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
@@ -100,6 +101,7 @@ backend/app/
 |-------|-----|-------------|
 | `health_records` | (time, user_id, metric_type) | (user_id, metric_type, time), (batch_id) |
 | `category_records` | (time, user_id, category_type) | (batch_id) |
+| `metric_daily` | (user_id, metric_type, day) | — (PK serves the read + upsert) |
 | `workouts` | id (UUID) | UNIQUE(user_id, time, activity_type), (batch_id) |
 | `workout_route_points` | (time, workout_id) | (workout_id) |
 | `activity_summaries` | (date, user_id) | — |
@@ -543,6 +545,39 @@ Key details:
 - **Raw metrics**: Capped at 10K rows (configurable via `limit` param, max 100K)
 - **Workout listings**: JSONB `metadata_` column deferred via `defer()`
 
+## Daily metric rollups (ADR-0009)
+
+The dashboard/metrics read path used to aggregate raw `health_records` on every wide-window
+load — a `GROUP BY date_trunc('day', time)` over ~1.05M HeartRate rows spills the sort to disk
+(~1.6 s), several per load. Fix: a **`metric_daily` rollup table** (one row per
+`(user_id, metric_type, day)` with `count`/`sum`/`min`/`max`/`unit`; avg is **derived**
+`sum/count`, never stored) and the read path reads that. A 1M-row scan becomes a ≤~1,900-row
+read. All in `services/rollup.py` (the clean, unit-tested home for the recompute + read logic):
+
+- **Read path** (`fetch_rollup_series`, wired into `api/metrics.py` `_fetch_health_metric` and
+  the `api/dashboard.py` summary SUM) serves **day/week/month** from `metric_daily`. Week/month
+  **re-bucket the daily rows** with the **same** `date_trunc` the raw path used
+  (`date_trunc(interval, day::timestamptz)`, UTC session) so rollup answers **equal** the old
+  raw-aggregation answers (the cardinal property, pinned by `test_rollup*`; avg agrees to float
+  tolerance — Σ-of-day-sums regroups double addition, ~1e-4 at the 4dp boundary). Sum-vs-avg
+  reuses the endpoints' existing `_CUMULATIVE_METRICS`/`_SUM_METRICS` split: cumulative → Σsum,
+  else Σsum/Σcount. **`raw` resolution still reads `health_records`** directly (capped). The
+  summary's **latest-value** (`DISTINCT ON`) + **sleep** parts stay on the raw tables (already fast).
+- **Backfill / rebuild** (`backfill_all`, `python -m app.services.rollup`, run from
+  `entrypoint.sh`) is one `GROUP BY user_id, metric_type, date_trunc('day', time)`. **Gated**: it
+  skips immediately when `metric_daily` is already populated (a `LIMIT 1` probe), so a normal pod
+  restart does NOT re-scan the ~6.6M-row table — only the first deploy pays the GROUP BY.
+  `--rebuild` (or `ROLLUP_REBUILD=1`) TRUNCATEs + rebuilds for recovery. Derived data: a rebuild
+  is always the recovery path.
+- **Kept fresh on ingest** by a **targeted** post-batch recompute (`recompute_for_rows` →
+  `recompute_buckets`): after a batch writes `health_records`, only the distinct
+  `(user, metric, day)` keys that batch touched are re-derived (delete-then-reinsert per key, so
+  idempotent + self-healing — a bucket whose raw rows all vanished is removed). Wired into the
+  **Apple Health XML pipeline** (`xml_parser._flush_batch`, isolated session, never breaks the
+  import) and the **Connector sync** (`connection_query.sync_connection`, same transaction,
+  idempotent like the dedup). **Fitbod import writes `training_sets`, not `health_records`, so it's
+  out of scope.** Only `health_records` is rolled up — `category_records` (sleep) stay query-time.
+
 ## Observability (perf-telemetry)
 
 Lightweight, structured backend telemetry to stdout (scraped by the cluster's Loki — no HTTP log
@@ -629,17 +664,18 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `e5f6a7b8c9d0`
-(`add per-user Connections (BYOT integrations)`, connections/ADR-0006; chains off
-`d4e5f6a7b8c9` recipes).
+Alembic migrations in `backend/alembic/versions/`. Current head: `f6a7b8c9d0e1`
+(`add metric_daily rollup table`, ADR-0009; chains off `e5f6a7b8c9d0` connections).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
-After migrations, `entrypoint.sh` runs three idempotent seeds (best-effort — a seed failure
-does not block boot), each runnable manually via the same `python -m` command:
-`app.services.seed_exercises` (the shared Exercise library from the vendored free-exercise-db
-dataset), `app.services.seed_principles` (the cited Principles KB, ADR-0004), and
-`app.services.seed_foods` (the generic whole-foods Food catalog, #21).
+After migrations, `entrypoint.sh` runs three idempotent seeds then the rollup backfill
+(best-effort — a failure does not block boot), each runnable manually via the same `python -m`
+command: `app.services.seed_exercises` (the shared Exercise library from the vendored
+free-exercise-db dataset), `app.services.seed_principles` (the cited Principles KB, ADR-0004),
+`app.services.seed_foods` (the generic whole-foods Food catalog, #21), and
+`app.services.rollup` (the daily metric-rollup backfill, ADR-0009 — gated to skip when already
+populated; `--rebuild` forces a full rebuild).
 
 ## CI/CD
 
@@ -673,6 +709,11 @@ SLOW_QUERY_MS=...      # Observability (perf-telemetry): any SQL statement slowe
                        #   than this many ms is logged once on app.slow_query with
                        #   its elapsed time + truncated statement. Default 200;
                        #   <=0 logs every statement.
+ROLLUP_REBUILD=...     # Daily metric rollups (ADR-0009): set to "1" to force the
+                       #   `python -m app.services.rollup` backfill to TRUNCATE +
+                       #   fully rebuild metric_daily (recovery). Default unset —
+                       #   the backfill skips when the table is already populated
+                       #   (a normal restart never re-scans health_records).
 ```
 
 Set in `.env` file, loaded by docker-compose.

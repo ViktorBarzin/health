@@ -3,6 +3,7 @@ from app.models.data_source import DataSource
 from app.models.import_batch import ImportBatch
 from app.models.health_record import HealthRecord
 from app.models.category_record import CategoryRecord
+from app.models.metric_daily import MetricDaily
 from app.models.workout import Workout
 from app.models.workout_route_point import WorkoutRoutePoint
 from app.models.activity_summary import ActivitySummary
@@ -40,6 +41,7 @@ __all__ = [
     "ImportBatch",
     "HealthRecord",
     "CategoryRecord",
+    "MetricDaily",
     "Workout",
     "WorkoutRoutePoint",
     "ActivitySummary",

@@ -1,6 +1,6 @@
 """Health metrics API routes."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
@@ -18,6 +18,7 @@ from app.schemas.metrics import (
     MetricStats,
     Resolution,
 )
+from app.services import rollup
 
 router = APIRouter()
 
@@ -94,6 +95,24 @@ def _bucket_interval(resolution: Resolution) -> str:
         Resolution.week: "week",
         Resolution.month: "month",
     }[resolution]
+
+
+def _rollup_day_bounds(
+    start: datetime | None, end: datetime | None
+) -> tuple["date | None", "date | None"]:
+    """Map a time-window to inclusive UTC date bounds for the daily rollup.
+
+    The rollup serves whole-day buckets keyed by the UTC calendar day. ``start`` is
+    floored to its UTC day; ``end`` uses the same end-of-day adjustment the raw path
+    applied (a midnight ``end`` extends to the next day), so the inclusive last day
+    is the day just before that exclusive instant — i.e. the ``end`` day itself.
+    """
+    start_date = _ensure_utc(start).astimezone(timezone.utc).date() if start is not None else None
+    end_date: date | None = None
+    if end is not None:
+        exclusive = _end_of_day(end).astimezone(timezone.utc)
+        end_date = (exclusive - timedelta(microseconds=1)).date()
+    return start_date, end_date
 
 
 async def _list_health_metrics(
@@ -198,37 +217,36 @@ async def _fetch_health_metric(
         stats = _build_stats([point.value for point in data])
         return MetricResponse(data=data, stats=_apply_trend(stats, data))
 
+    # day/week/month read from the daily rollup (ADR-0009): a ~1,900-row read
+    # instead of a ~1M-row scan+sort over health_records. Week/month re-bucket the
+    # daily rows with the same date_trunc the raw path used, so the answer is
+    # identical. Sum-type metrics (StepCount, ActiveEnergyBurned, …) total Σsum;
+    # everything else averages Σsum/Σcount — reusing the same _CUMULATIVE_METRICS
+    # split the raw query used (func.sum vs func.avg).
     interval = _bucket_interval(resolution)
-    bucket = func.date_trunc(interval, HealthRecord.time).label("bucket")
-    aggregate_fn = (
-        func.sum if metric_type in _CUMULATIVE_METRICS else func.avg
+    aggregate = "sum" if metric_type in _CUMULATIVE_METRICS else "avg"
+    start_date, end_date = _rollup_day_bounds(start, end)
+    rows = await rollup.fetch_rollup_series(
+        db,
+        user_id=user_id,
+        metric_type=metric_type,
+        interval=interval,
+        aggregate=aggregate,
+        start=start_date,
+        end=end_date,
     )
-    stmt = (
-        select(
-            bucket,
-            aggregate_fn(HealthRecord.value).label("bucket_value"),
-            func.min(HealthRecord.value).label("min_value"),
-            func.max(HealthRecord.value).label("max_value"),
-            func.count().label("cnt"),
-        )
-        .where(*base_filter)
-        .group_by(text("1"))
-        .order_by(text("1"))
-    )
-    result = await db.execute(stmt)
-    rows = result.all()
     data = [
         MetricDataPoint(
-            time=row.bucket,
-            value=round(row.bucket_value, 4),
-            min=round(row.min_value, 4),
-            max=round(row.max_value, 4),
+            time=row["bucket"],
+            value=round(row["value"], 4),
+            min=round(row["min"], 4),
+            max=round(row["max"], 4),
         )
         for row in rows
     ]
     stats = _build_stats([point.value for point in data])
     if rows:
-        stats.count = sum(row.cnt for row in rows)
+        stats.count = sum(row["count"] for row in rows)
     return MetricResponse(data=data, stats=_apply_trend(stats, data))
 
 

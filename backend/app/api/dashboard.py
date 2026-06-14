@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.activity_summary import ActivitySummary
 from app.models.category_record import CategoryRecord
 from app.models.health_record import HealthRecord
+from app.models.metric_daily import MetricDaily
 from app.models.user import User
 from app.schemas.dashboard import DashboardSummary
 
@@ -85,29 +86,32 @@ async def get_dashboard_summary(
     exercise_minutes = activity_row[0]
     stand_hours = activity_row[1]
 
-    # -- Combined SUM query for StepCount + ActiveEnergyBurned (1 query) ----
-    time_filters: list = [
-        HealthRecord.user_id == user.id,
-        HealthRecord.metric_type.in_(_SUM_METRICS),
-        HealthRecord.time >= range_start,
+    # -- Combined SUM query for StepCount + ActiveEnergyBurned, from the daily
+    #    rollup (ADR-0009): sum the per-day `sum` over the day range instead of
+    #    scanning raw health_records. Σ over whole-day buckets == the raw Σ for the
+    #    same days (StepCount/ActiveEnergyBurned are cumulative). 1 query.
+    sum_filters: list = [
+        MetricDaily.user_id == user.id,
+        MetricDaily.metric_type.in_(_SUM_METRICS),
+        MetricDaily.day >= range_start.date(),
     ]
     if range_end is not None:
-        time_filters.append(HealthRecord.time <= range_end)
+        sum_filters.append(MetricDaily.day <= (range_end - timedelta(microseconds=1)).date())
 
     sums_stmt = select(
         func.sum(
             case(
-                (HealthRecord.metric_type == "StepCount", HealthRecord.value),
+                (MetricDaily.metric_type == "StepCount", MetricDaily.sum),
                 else_=None,
             )
         ).label("steps"),
         func.sum(
             case(
-                (HealthRecord.metric_type == "ActiveEnergyBurned", HealthRecord.value),
+                (MetricDaily.metric_type == "ActiveEnergyBurned", MetricDaily.sum),
                 else_=None,
             )
         ).label("energy"),
-    ).where(*time_filters)
+    ).where(*sum_filters)
 
     sums_result = await db.execute(sums_stmt)
     sums_row = sums_result.one()

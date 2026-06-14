@@ -130,6 +130,13 @@ smart scale).
 A typed per-user health time series (heart rate, body mass, HRV, …) made of timestamped
 samples.
 
+**Rollup**:
+A derived daily pre-aggregation of a **Metric** — one bucket per (user, metric, day) holding
+count/sum/min/max — that the dashboard and metric charts read for day/week/month views
+instead of scanning the raw samples (ADR-0009). Always reconstructable from the raw samples
+(a full rebuild is the recovery path); kept fresh by recomputing only the days an **Import**
+touched. _Avoid_: cache (a Rollup is authoritative-derived, not a TTL cache), materialized view.
+
 **Export**:
 A user's full personal archive — every Session, Set, Workout, Metric, and Diary Entry — as
 downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.

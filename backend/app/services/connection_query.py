@@ -53,6 +53,7 @@ from app.services.connectors.base import (
     NormalizedRecord,
     SourceConnector,
 )
+from app.services import rollup
 from app.services.crypto import CredentialCipher
 from app.services.dedup import (
     bulk_insert_category_records,
@@ -295,6 +296,11 @@ async def sync_connection(
         )
         if health_rows:
             await bulk_insert_health_records(db, health_rows)
+            # Keep the daily rollups fresh for the (user, metric, day) buckets this
+            # pull touched (ADR-0009) — a targeted recompute in the same
+            # transaction, idempotent like the dedup above (a re-pull adds no rows,
+            # so the recomputed buckets are unchanged).
+            await rollup.recompute_for_rows(db, health_rows)
         if category_rows:
             await bulk_insert_category_records(db, category_rows)
         ingested = len(records)
