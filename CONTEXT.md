@@ -77,6 +77,19 @@ exercise's Set history.
 **Gym Profile**:
 A user's set of available equipment; constrains which Exercises a Recommendation may select.
 
+**Swap**:
+Replacing one Exercise slot of a Recommendation — before starting it or mid-Session — with a
+ranked equivalent: same target muscles, within the Gym Profile, Recovery-aware, preferring
+Exercises the user has history on. The replacement carries its own Progression targets, never
+the outgoing Exercise's numbers.
+_Avoid_: substitute, replace (unqualified)
+
+**Exclusion**:
+A per-user "never recommend this Exercise again" mark; constrains generation exactly like the
+Gym Profile does. Set from a Swap, reversible in settings. Explicit only — the engine never
+infers dislike from Swap behavior (ADR-0002 determinism).
+_Avoid_: blacklist, ban
+
 **Readiness**:
 A daily per-user signal derived from HRV, resting heart rate, and sleep trends; an input the
 engine may weigh, and a dashboard insight in its own right.
@@ -157,6 +170,8 @@ downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.
   user's edits always win
 - A **Recommendation** without an active **Program** is generated freestyle from
   **Recovery** + **Progression** state within the user's **Gym Profile**
+- Any **Recommendation** slot can be **Swapped**; an **Exclusion** removes an **Exercise**
+  from all future generation for that user — both leave the **Program** itself untouched
 - **Progression** consumes rep performance and logged **Effort** (effort-gated double
   progression); when Effort is missing it falls back to rep performance alone — rating is
   never required
@@ -187,6 +202,10 @@ downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.
 - "no connectors — everything rides export.zip, Strava is a pure mirror" (2026-06-12) was
   reversed 2026-06-13: opt-in **Connectors** are now a first-class, extensible part of the
   platform (ADR-0006). Apple export.zip remains one Connector among several.
+- "install it on my watch" (2026-07-13) resolved: there is **no watch app** — watchOS cannot
+  install a PWA, and a native companion stays out (ADR-0007). The watch surface is the
+  iPhone's lock-screen rest-timer notification mirrored to a paired Apple Watch by the OS
+  (ADR-0010). "Watch support" in this project means exactly that and nothing more.
 - The first shipped Connector framework is the **BYOT** (bring-your-own-token) variant
   (2026-06-13): each user pastes their **own** API token per provider (Oura via a Personal
   Access Token is the reference), stored encrypted at rest and pulled on a schedule. This

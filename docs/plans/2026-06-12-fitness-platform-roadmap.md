@@ -105,7 +105,9 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 - Strava push (our Sessions → Strava) — rejected 2026-06-13; Strava remains a mirror of
   the watch, not of us.
 - Watch companion / HealthKit write-back — structurally impossible for a PWA; mitigated by
-  sub-3-tap offline logging + screen wake-lock.
+  sub-3-tap offline logging + screen wake-lock. (2026-07-13 nuance: still no watch *app*,
+  but the rest timer's lock-screen Web Push mirrors to a paired Apple Watch — ADR-0010,
+  docs/plans/2026-07-13-fitbod-exit-gym-pwa.md.)
 - Native mobile apps in M1–M3 — mobile-first PWA only (ADR-0007). A Capacitor Android shell
   (TripIt-style) is a later follow-on; iOS native is deferred until the paid Apple Developer
   Program is worth it.
