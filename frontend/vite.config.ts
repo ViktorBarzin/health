@@ -31,8 +31,11 @@ export default defineConfig({
         name: 'Health — Fitness Platform',
         short_name: 'Health',
         description: 'Self-hosted fitness platform: log Sessions, track training, own your data.',
-        theme_color: '#10b981',
-        background_color: '#020617',
+        // Athletic Instrument identity (ADR-0008): near-black base, matching the
+        // dark scheme-aware <meta theme-color> in app.html. name/short_name
+        // mirror the brand token (lib/brand.ts) — the single source if renamed.
+        theme_color: '#0a0a0b',
+        background_color: '#0a0a0b',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',

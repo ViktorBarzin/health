@@ -30,6 +30,7 @@
   } from '$lib/types';
   import { requestWakeLock, type WakeLockHandle } from '$lib/wake-lock';
   import { formatNumber } from '$lib/utils/format';
+  import { haptic } from '$lib/ui/haptics';
 
   // The live gym-logging surface — OFFLINE-FIRST (ADR-0005, #6). A Session is an
   // ordered list of Sets; we render them in blocks (lib/superset.ts) —
@@ -157,7 +158,9 @@
   }
 
   function celebrate(prs: PRResult[]) {
-    celebratedPrs = celebratablePrs(prs);
+    const worth = celebratablePrs(prs);
+    if (worth.length > 0) haptic('pr'); // the big tactile moment
+    celebratedPrs = worth;
   }
 
   // Fetch the effective rest duration for any exercise in the Session we haven't
@@ -250,6 +253,7 @@
     );
     if (clientPrs.length > 0) celebrate(clientPrs);
     await store.addSet(payload);
+    haptic('success'); // crisp tactile confirm — even with no signal
     // Auto-start the rest timer for the exercise just logged.
     await ensureRest(payload.exercise_id);
     startRestFor(payload.exercise_id);
@@ -305,10 +309,12 @@
 
   function stepWeight(s: TrainingSet, delta: number) {
     const next = Math.max(0, Math.round((s.weight_kg + delta) * 100) / 100);
+    haptic('tick');
     patchSetDebounced(s.id, { weight_kg: next });
   }
   function stepReps(s: TrainingSet, delta: number) {
     const next = Math.max(0, s.reps + delta);
+    haptic('tick');
     patchSetDebounced(s.id, { reps: next });
   }
   function onWeightInput(s: TrainingSet, e: Event) {
@@ -407,6 +413,7 @@
   async function finish() {
     if (!session || finishing) return;
     finishing = true;
+    haptic('finish');
     await store.finish();
     await goto('/sessions');
   }
@@ -548,31 +555,31 @@
 
                 <!-- Weight stepper -->
                 <div class="flex items-center gap-1 flex-1">
-                  <button onclick={() => stepWeight(s, -2.5)} class="w-8 h-8 rounded-lg bg-surface-700 text-surface-200 text-lg font-medium hover:bg-surface-600 active:bg-surface-500 transition-colors" aria-label="Decrease weight">−</button>
+                  <button onclick={() => stepWeight(s, -2.5)} class="w-10 h-10 rounded-xl bg-surface-700 text-surface-200 text-xl font-medium hover:bg-surface-600 active:bg-surface-500 active:scale-90 transition-[transform,background-color]" aria-label="Decrease weight">−</button>
                   <div class="relative flex-1 min-w-0">
                     <input
                       type="number" inputmode="decimal" step="0.5" value={s.weight_kg}
                       oninput={(e) => onWeightInput(s, e)}
-                      class="w-full text-center py-1.5 bg-surface-900 border border-surface-700 rounded-lg text-surface-100 text-sm font-semibold focus:outline-none focus:border-primary-500"
+                      class="readout w-full text-center py-1.5 bg-surface-900 border border-surface-700 rounded-lg text-surface-100 text-lg font-semibold focus:outline-none focus:border-primary-500"
                       aria-label="Weight in kg"
                     />
                     <span class="absolute right-1.5 top-1/2 -translate-y-1/2 text-[0.6rem] text-surface-500 pointer-events-none">kg</span>
                   </div>
-                  <button onclick={() => stepWeight(s, 2.5)} class="w-8 h-8 rounded-lg bg-surface-700 text-surface-200 text-lg font-medium hover:bg-surface-600 active:bg-surface-500 transition-colors" aria-label="Increase weight">+</button>
+                  <button onclick={() => stepWeight(s, 2.5)} class="w-10 h-10 rounded-xl bg-surface-700 text-surface-200 text-xl font-medium hover:bg-surface-600 active:bg-surface-500 active:scale-90 transition-[transform,background-color]" aria-label="Increase weight">+</button>
                 </div>
 
                 <span class="text-surface-600 text-sm">×</span>
 
                 <!-- Reps stepper -->
                 <div class="flex items-center gap-1">
-                  <button onclick={() => stepReps(s, -1)} class="w-8 h-8 rounded-lg bg-surface-700 text-surface-200 text-lg font-medium hover:bg-surface-600 active:bg-surface-500 transition-colors" aria-label="Decrease reps">−</button>
+                  <button onclick={() => stepReps(s, -1)} class="w-10 h-10 rounded-xl bg-surface-700 text-surface-200 text-xl font-medium hover:bg-surface-600 active:bg-surface-500 active:scale-90 transition-[transform,background-color]" aria-label="Decrease reps">−</button>
                   <input
                     type="number" inputmode="numeric" value={s.reps}
                     oninput={(e) => onRepsInput(s, e)}
-                    class="w-12 text-center py-1.5 bg-surface-900 border border-surface-700 rounded-lg text-surface-100 text-sm font-semibold focus:outline-none focus:border-primary-500"
+                    class="readout w-12 text-center py-1.5 bg-surface-900 border border-surface-700 rounded-lg text-surface-100 text-lg font-semibold focus:outline-none focus:border-primary-500"
                     aria-label="Reps"
                   />
-                  <button onclick={() => stepReps(s, 1)} class="w-8 h-8 rounded-lg bg-surface-700 text-surface-200 text-lg font-medium hover:bg-surface-600 active:bg-surface-500 transition-colors" aria-label="Increase reps">+</button>
+                  <button onclick={() => stepReps(s, 1)} class="w-10 h-10 rounded-xl bg-surface-700 text-surface-200 text-xl font-medium hover:bg-surface-600 active:bg-surface-500 active:scale-90 transition-[transform,background-color]" aria-label="Increase reps">+</button>
                 </div>
               </div>
 

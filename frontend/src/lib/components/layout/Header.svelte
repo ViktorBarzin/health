@@ -1,79 +1,61 @@
 <script lang="ts">
   import { auth } from '$lib/stores/auth.svelte';
-  import DateRangePicker from './DateRangePicker.svelte';
 
-  interface Props {
-    title: string;
-  }
-
-  let { title }: Props = $props();
-
+  // The global date-range picker no longer lives in the shell (ADR-0008) — it
+  // belongs only on the Progress review screens, where a range is meaningful.
+  let { title }: { title: string } = $props();
   let userMenuOpen = $state(false);
-
-  function toggleUserMenu() {
-    userMenuOpen = !userMenuOpen;
-  }
-
-  function closeUserMenu() {
-    userMenuOpen = false;
-  }
 </script>
 
-<header class="bg-surface-900 border-b border-surface-700 px-4 lg:px-6 py-3">
+<header
+  class="sticky top-0 z-20 border-b border-edge bg-panel/85 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl lg:px-6"
+>
   <div class="flex items-center justify-between gap-4">
-    <!-- Left: brand mark (mobile) + title -->
-    <div class="flex items-center gap-3">
-      <div class="lg:hidden w-7 h-7 rounded-lg bg-primary-500 flex items-center justify-center flex-shrink-0">
-        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+    <div class="flex min-w-0 items-center gap-2.5">
+      <div
+        class="grid h-7 w-7 flex-shrink-0 place-items-center rounded-lg bg-accent text-on-accent lg:hidden"
+      >
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
         </svg>
       </div>
-      <h2 class="text-lg font-semibold text-surface-100">{title}</h2>
+      <h1 class="truncate text-lg font-semibold tracking-tight text-ink">{title}</h1>
     </div>
 
-    <!-- Center: date range picker -->
-    <div class="hidden md:flex flex-1 justify-center max-w-2xl">
-      <DateRangePicker />
-    </div>
-
-    <!-- Right: user menu -->
-    <div class="relative">
+    <div class="relative flex-shrink-0">
       <button
-        class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
-        onclick={toggleUserMenu}
+        onclick={() => (userMenuOpen = !userMenuOpen)}
+        class="flex items-center rounded-full p-0.5 transition-colors hover:bg-panel-2"
+        aria-label="Account"
       >
-        <div class="w-7 h-7 rounded-full bg-primary-500/20 flex items-center justify-center">
-          <span class="text-xs font-medium text-primary-400">
-            {auth.user?.email?.charAt(0).toUpperCase() ?? '?'}
-          </span>
-        </div>
-        <span class="hidden sm:inline">{auth.user?.email ?? ''}</span>
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-        </svg>
+        <span
+          class="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-ink"
+        >
+          {auth.user?.email?.charAt(0).toUpperCase() ?? '?'}
+        </span>
       </button>
 
       {#if userMenuOpen}
-        <button class="fixed inset-0 z-40" onclick={closeUserMenu} aria-label="Close menu"></button>
-        <div class="absolute right-0 mt-2 w-48 bg-surface-800 rounded-lg shadow-lg border border-surface-700 py-1 z-50">
-          <div class="px-4 py-2 border-b border-surface-700">
-            <p class="text-sm text-surface-200 truncate">{auth.user?.email}</p>
-            <p class="text-xs text-surface-500">Signed in</p>
+        <button
+          class="fixed inset-0 z-40"
+          onclick={() => (userMenuOpen = false)}
+          aria-label="Close menu"
+        ></button>
+        <div
+          class="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-2xl border border-edge bg-panel shadow-xl"
+        >
+          <div class="border-b border-edge px-4 py-3">
+            <p class="truncate text-sm text-ink">{auth.user?.email}</p>
+            <p class="text-xs text-ink-3">Signed in</p>
           </div>
           <a
             href="/settings"
-            class="block px-4 py-2 text-sm text-surface-300 hover:bg-surface-700 hover:text-surface-100 transition-colors"
-            onclick={closeUserMenu}
+            onclick={() => (userMenuOpen = false)}
+            class="block px-4 py-2.5 text-sm text-ink-2 transition-colors hover:bg-panel-2 hover:text-ink"
+            >Settings</a
           >
-            Settings
-          </a>
         </div>
       {/if}
     </div>
-  </div>
-
-  <!-- Mobile date range picker -->
-  <div class="md:hidden mt-3">
-    <DateRangePicker />
   </div>
 </header>

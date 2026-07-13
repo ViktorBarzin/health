@@ -2,6 +2,7 @@
   import { Chart, registerables } from 'chart.js';
   import type { ChartConfiguration } from 'chart.js';
   import { DEFAULT_MAX_POINTS, downsampleSeries } from '$lib/dashboard';
+  import { chartTheme } from '$lib/ui/chart-theme';
 
   Chart.register(...registerables);
 
@@ -36,6 +37,7 @@
     const points = downsampleSeries(data, DEFAULT_MAX_POINTS);
     const labels = points.map((d) => d.time);
     const values = points.map((d) => d.value);
+    const t = chartTheme();
 
     return {
       type,
@@ -67,10 +69,10 @@
             display: false,
           },
           tooltip: {
-            backgroundColor: '#1e293b',
-            titleColor: '#f1f5f9',
-            bodyColor: '#94a3b8',
-            borderColor: '#334155',
+            backgroundColor: t.tooltipBg,
+            titleColor: t.tooltipTitle,
+            bodyColor: t.tooltipBody,
+            borderColor: t.border,
             borderWidth: 1,
             padding: 10,
             callbacks: {
@@ -94,10 +96,10 @@
             display: true,
             grid: {
               display: showGrid,
-              color: '#47556922',
+              color: t.grid,
             },
             ticks: {
-              color: '#64748b',
+              color: t.tick,
               maxTicksLimit: 8,
               callback(value) {
                 const raw = this.getLabelForValue(value as number);
@@ -107,20 +109,20 @@
               },
             },
             border: {
-              color: '#334155',
+              color: t.border,
             },
           },
           y: {
             display: true,
             grid: {
               display: showGrid,
-              color: '#47556922',
+              color: t.grid,
             },
             ticks: {
-              color: '#64748b',
+              color: t.tick,
             },
             border: {
-              color: '#334155',
+              color: t.border,
             },
           },
         },
