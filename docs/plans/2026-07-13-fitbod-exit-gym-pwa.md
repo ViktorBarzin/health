@@ -1,6 +1,19 @@
 # Fitbod exit: gym-ready PWA (grilled with Viktor, 2026-07-13)
 
-Status: **approved — executing**
+Status: **executing — ①②③④ shipped to prod same day; ⑤ waits on Viktor's CSV**
+
+## Execution progress (2026-07-13 evening)
+
+| Item | State | Evidence |
+|------|-------|----------|
+| ① Swap + Exclusion | **Live** | 17 new backend tests + pure `lib/swap.ts` vitest; SwapSheet on Today + live Session; Settings manager |
+| ② Rest-timer Web Push | **Live** | 9 backend tests; VAPID keys in Vault → ExternalSecret → env (verified in-cluster); prod `GET /api/push/config` returns `enabled:true`; **awaiting Viktor's on-device lock-screen + Watch check** |
+| ③ Duration shaper | **Live** | 7 pure tests; 30/45/60 chips on Today |
+| ④ Day-type override | **Live** | 5 API tests; day pills (Program) / muscle groups (freestyle) |
+| ⑤ Seed history + Program | **Blocked on Viktor** | needs his Fitbod CSV export, then quiz → activate; then the 3-Session gym trial |
+
+Full backend suite 837 green; frontend 271 vitest green; migration chain
+f6a7b8c9d0e1 → a7b8c9d0e1f2 → b8c9d0e1f2a3 applied; deploy ef8aac72 rolled out.
 
 Goal: Viktor trains in his gym entirely from this app and deletes Fitbod. The grill
 established that the platform is much further along than the ask implied — the app already
