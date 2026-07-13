@@ -181,6 +181,28 @@
     await applyAdjust();
   }
 
+  // One-tap duration shaper (plan ③): "I have N minutes" → the deterministic
+  // shaper fits the day via the bounded adjust levers. The shaped result is
+  // exactly what's displayed, so Start switches to the WYSIWYG path.
+  const durations = [30, 45, 60];
+  let shaping = $state(false);
+
+  async function shapeTo(minutes: number) {
+    if (shaping) return;
+    shaping = true;
+    error = '';
+    try {
+      const res = await api.post<AdjustResponse>('/api/recommendations/shape', { minutes });
+      today = res;
+      adjustNote = res.note;
+      swapped = true; // start exactly what's displayed
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to shape the workout';
+    } finally {
+      shaping = false;
+    }
+  }
+
   let exercises = $derived(today?.exercises ?? []);
   let isEmpty = $derived(!loading && exercises.length === 0);
   let ctx = $derived(today?.program ?? null);
@@ -345,6 +367,18 @@
         >
           {adjustOpen ? 'Close' : 'Tweak it'}
         </button>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[11px] text-surface-500 shrink-0">Time I have:</span>
+        {#each durations as m (m)}
+          <button
+            onclick={() => shapeTo(m)}
+            disabled={shaping}
+            class="px-2.5 py-1 rounded-full text-[11px] bg-surface-700 hover:bg-surface-600 text-surface-200 transition-colors disabled:opacity-50 tabular-nums"
+          >
+            {m} min
+          </button>
+        {/each}
       </div>
       <div class="flex flex-wrap gap-1.5">
         {#each quickAdjusts as q (q)}

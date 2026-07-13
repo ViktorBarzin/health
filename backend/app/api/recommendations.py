@@ -31,6 +31,7 @@ from app.schemas.recommendation import (
     AdjustResponse,
     AutoregulationRead,
     ExplicitStartRequest,
+    ShapeRequest,
     ProgramContext,
     RecommendationResponse,
     RecommendedExerciseRead,
@@ -46,6 +47,7 @@ from app.services.recommendation import (
     Recommendation,
     RecommendedExercise,
 )
+from app.services.duration import shape_to_duration
 from app.services.recommendation_query import (
     adjust_today,
     instantiate_session,
@@ -206,6 +208,40 @@ async def start_today(
     recommendation, _ = await recommend_today(db, user.id, now=now)
     session = await instantiate_session(db, user.id, recommendation)
     return _detail(session)
+
+
+@router.post("/shape", response_model=AdjustResponse)
+async def shape_today(
+    payload: ShapeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdjustResponse:
+    """One-tap duration shaping: fit today's Recommendation into N minutes.
+
+    A deterministic preset over the SAME bounded adjust pipeline (plan ③,
+    ADR-0002): the shaper picks the (exercise count, volume scale) that uses
+    the most of the budget, `apply_adjustment` produces the editable result.
+    Returned in the adjust wire shape so the Today UI renders it identically;
+    starting the shaped day goes through the explicit /start path.
+    """
+    now = datetime.now(timezone.utc)
+    recommendation, program_rec = await recommend_today(db, user.id, now=now)
+    result = shape_to_duration(recommendation, payload.minutes)
+    base = _to_response(result.recommendation)
+    program = _program_context(program_rec) if program_rec is not None else None
+    return AdjustResponse(
+        exercises=base.exercises,
+        source="program" if program_rec is not None else "freestyle",
+        program=program,
+        note=result.note,
+        applied={
+            "volume_scale": result.adjustment.volume_scale,
+            "exclude_equipment": [],
+            "max_exercises": result.adjustment.max_exercises,
+            "estimated_minutes": round(result.estimated_seconds / 60),
+            "fits": result.fits,
+        },
+    )
 
 
 @router.post(

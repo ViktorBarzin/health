@@ -162,3 +162,11 @@ class AdjustResponse(TodayRecommendationResponse):
 
     note: str = ""
     applied: dict = {}
+
+
+class ShapeRequest(BaseModel):
+    """One-tap duration shaping: fit today's proposal into this many minutes."""
+
+    minutes: int = Field(ge=10, le=240)
+
+    model_config = {"extra": "forbid"}
