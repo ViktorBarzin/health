@@ -8,7 +8,14 @@
   import PRCelebration from '$lib/components/sessions/PRCelebration.svelte';
   import RestTimer from '$lib/components/sessions/RestTimer.svelte';
   import SetTypeChip from '$lib/components/sessions/SetTypeChip.svelte';
+  import SwapSheet from '$lib/components/sessions/SwapSheet.svelte';
   import SyncIndicator from '$lib/components/sessions/SyncIndicator.svelte';
+  import {
+    alternativesKvKey,
+    incomingSets,
+    swappedOrder,
+    type SwapAlternative,
+  } from '$lib/swap';
   import type { GymEquipment } from '$lib/plates';
   import {
     celebratablePrs,
@@ -72,6 +79,91 @@
   // Superset build mode: tapping sets selects them; confirming groups them.
   let supersetMode = $state(false);
   let selectedSetIds = $state<Set<string>>(new Set());
+
+  // --- Swap (CONTEXT.md "Swap"): "station is taken → give me an equivalent". ---
+  // Alternatives are PREFETCHED per Exercise while online (and cached in
+  // IndexedDB) so the sheet opens instantly and survives a mid-Session signal
+  // drop; the swap itself is plain op-queue verbs, so it applies offline too.
+  let swapFor = $state<{ exerciseId: string; setIds: string[] } | null>(null);
+  let altsByExercise = $state<Record<string, SwapAlternative[]>>({});
+  let altsOffline = $state(false);
+  let swapNotice = $state('');
+  const altsRequested = new Set<string>();
+
+  $effect(() => {
+    const ids = [...new Set((session?.sets ?? []).map((s) => s.exercise_id))];
+    for (const id of ids) {
+      if (altsRequested.has(id)) continue;
+      altsRequested.add(id);
+      void prefetchAlternatives(id, ids);
+    }
+  });
+
+  async function prefetchAlternatives(exerciseId: string, sessionIds: string[]) {
+    try {
+      const others = sessionIds.filter((x) => x !== exerciseId).join(',');
+      const alts = await api.get<SwapAlternative[]>(
+        `/api/exercises/${exerciseId}/alternatives${others ? `?exclude=${others}` : ''}`,
+      );
+      altsByExercise[exerciseId] = alts;
+      altsOffline = false;
+      await putKV(alternativesKvKey(exerciseId), alts);
+    } catch {
+      const cached = await getKV<SwapAlternative[]>(alternativesKvKey(exerciseId));
+      if (cached) {
+        altsByExercise[exerciseId] = cached;
+        altsOffline = true;
+      } else {
+        // Nothing cached — allow a later retry (e.g. when the sheet opens).
+        altsRequested.delete(exerciseId);
+      }
+    }
+  }
+
+  function openSwap(exerciseId: string, setIds: string[]) {
+    swapFor = { exerciseId, setIds };
+    if (!(exerciseId in altsByExercise)) {
+      const ids = [...new Set((session?.sets ?? []).map((s) => s.exercise_id))];
+      void prefetchAlternatives(exerciseId, ids);
+    }
+  }
+
+  async function applySwap(alt: SwapAlternative) {
+    if (!session || !swapFor) return;
+    const target = swapFor;
+    swapFor = null;
+    const outgoingIds = new Set(target.setIds);
+    const outgoing = session.sets.filter((s) => outgoingIds.has(s.id));
+    if (outgoing.length === 0) return;
+    const originalIds = session.sets.map((s) => s.id);
+    // Delete-then-add-then-reorder: the server replays the queue FIFO, so it
+    // never sees a reorder naming ids that still hold the old exercise.
+    for (const id of target.setIds) await store.deleteSet(id);
+    const newIds: string[] = [];
+    for (const payload of incomingSets(outgoing, alt)) {
+      newIds.push(await store.addSet(payload));
+    }
+    store.setExerciseName(alt.exercise_id, alt.name);
+    await store.reorder(swappedOrder(originalIds, target.setIds, newIds));
+    await ensureRest(alt.exercise_id);
+    haptic('success');
+    swapNotice = `Swapped to ${alt.name}.`;
+    setTimeout(() => (swapNotice = ''), 4000);
+  }
+
+  async function applyExclude() {
+    if (!swapFor) return;
+    const id = swapFor.exerciseId;
+    const name = exerciseName(id);
+    swapFor = null;
+    try {
+      await api.put(`/api/exercises/${id}/exclusion`);
+      swapNotice = `Won't recommend ${name} again — undo in Settings.`;
+    } catch {
+      swapNotice = "Couldn't save the exclusion (offline?) — try again from Settings.";
+    }
+    setTimeout(() => (swapNotice = ''), 6000);
+  }
 
   // Screen wake-lock: held while the Session is active.
   let wakeLock: WakeLockHandle | null = null;
@@ -485,6 +577,12 @@
       <p class="text-sm text-red-400">{error}</p>
     {/if}
 
+    {#if swapNotice}
+      <div class="px-4 py-2.5 rounded-xl bg-primary-500/10 border border-primary-500/30">
+        <p class="text-xs font-medium text-primary-200">{swapNotice}</p>
+      </div>
+    {/if}
+
     <!-- Superset build toolbar -->
     {#if session.sets.length >= 2}
       <div class="flex items-center justify-between gap-2">
@@ -525,6 +623,16 @@
               {exerciseName(block.exerciseId)}
             </a>
             <div class="flex items-center gap-2 shrink-0">
+              {#if session.is_active}
+                <button
+                  onclick={() => openSwap(block.exerciseId, block.sets.map((s) => s.id))}
+                  class="inline-flex items-center gap-1 text-xs text-surface-500 hover:text-surface-300"
+                  aria-label="Swap exercise"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
+                  Swap
+                </button>
+              {/if}
               <button onclick={() => editRest(block.exerciseId)} class="inline-flex items-center gap-1 text-xs text-surface-500 hover:text-surface-300" aria-label="Edit rest duration">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                 {restByExercise[block.exerciseId] ?? 120}s
@@ -657,6 +765,16 @@
 {/if}
 
 <ExercisePicker open={pickerOpen} onpick={addExercise} onclose={() => (pickerOpen = false)} />
+
+<SwapSheet
+  open={swapFor !== null}
+  exerciseName={swapFor ? exerciseName(swapFor.exerciseId) : ''}
+  alternatives={swapFor ? (altsByExercise[swapFor.exerciseId] ?? null) : null}
+  offline={altsOffline}
+  onpick={applySwap}
+  onexclude={applyExclude}
+  onclose={() => (swapFor = null)}
+/>
 
 <PlateCalculator
   open={calcOpen}

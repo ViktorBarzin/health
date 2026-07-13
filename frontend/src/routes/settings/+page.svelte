@@ -6,6 +6,7 @@
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
   import FitbodImport from '$lib/components/import/FitbodImport.svelte';
+  import Exclusions from '$lib/components/settings/Exclusions.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
   import ExportData from '$lib/components/settings/ExportData.svelte';
   import Connections from '$lib/components/settings/Connections.svelte';
@@ -43,6 +44,15 @@
       <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
     </div>
     <GymProfileSettings />
+  </section>
+
+  <!-- Excluded exercises (CONTEXT.md "Exclusion") -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Excluded exercises</h2>
+      <p class="text-sm text-surface-500 mt-1">Movements you've told the engine to never recommend again. Remove one to allow it back.</p>
+    </div>
+    <Exclusions />
   </section>
 
   <!-- Connections Section (BYOT integrations, ADR-0006) -->

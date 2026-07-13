@@ -1,9 +1,16 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import SwapSheet from '$lib/components/sessions/SwapSheet.svelte';
   import { muscleLabel } from '$lib/muscle-heat';
   import { readinessColor } from '$lib/readiness';
-  import type { AdjustResponse, SessionDetail, TodayRecommendationResponse } from '$lib/types';
+  import type { SwapAlternative } from '$lib/swap';
+  import type {
+    AdjustResponse,
+    RecommendedExercise,
+    SessionDetail,
+    TodayRecommendationResponse,
+  } from '$lib/types';
   import { formatWeight } from '$lib/utils/format';
 
   // Today's workout (#13/#14, ADR-0004): drawn from the active Program's next due
@@ -63,17 +70,103 @@
     starting = true;
     error = '';
     try {
-      // If the user adjusted, start the adjusted shape; otherwise start today's.
-      const path = adjustNote
-        ? '/api/recommendations/adjust/start'
-        : '/api/recommendations/today/start';
-      const body = adjustNote ? { request: lastRequest } : {};
-      const created = await api.post<SessionDetail>(path, body);
+      let created: SessionDetail;
+      if (swapped) {
+        // A Swapped slot diverges from what a regenerate would produce, so
+        // start EXACTLY what's displayed (the WYSIWYG path).
+        created = await api.post<SessionDetail>('/api/recommendations/start', {
+          exercises: exercises.map((ex) => ({
+            exercise_id: ex.exercise_id,
+            target_sets: ex.target_sets,
+            target_reps: ex.target_reps,
+            target_weight_kg: ex.target_weight_kg,
+          })),
+        });
+      } else {
+        // If the user adjusted, start the adjusted shape; otherwise today's.
+        const path = adjustNote
+          ? '/api/recommendations/adjust/start'
+          : '/api/recommendations/today/start';
+        const body = adjustNote ? { request: lastRequest } : {};
+        created = await api.post<SessionDetail>(path, body);
+      }
       await goto(`/sessions/${created.id}`);
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to start workout';
       starting = false;
     }
+  }
+
+  // --- Swap a slot before starting (CONTEXT.md "Swap") ---
+  let swapForId = $state<string | null>(null);
+  let swapped = $state(false);
+  let altsByExercise = $state<Record<string, SwapAlternative[]>>({});
+  const altsRequested = new Set<string>();
+
+  // Prefetch each slot's alternatives once the proposal is loaded, so the
+  // sheet opens instantly at the rack.
+  $effect(() => {
+    for (const ex of exercises) {
+      if (altsRequested.has(ex.exercise_id)) continue;
+      altsRequested.add(ex.exercise_id);
+      void prefetchAlternatives(ex.exercise_id);
+    }
+  });
+
+  async function prefetchAlternatives(exerciseId: string) {
+    try {
+      const others = exercises
+        .map((e) => e.exercise_id)
+        .filter((id) => id !== exerciseId)
+        .join(',');
+      altsByExercise[exerciseId] = await api.get<SwapAlternative[]>(
+        `/api/exercises/${exerciseId}/alternatives${others ? `?exclude=${others}` : ''}`,
+      );
+    } catch {
+      altsRequested.delete(exerciseId); // retry when the sheet opens
+    }
+  }
+
+  function applySwap(alt: SwapAlternative) {
+    if (!today || !swapForId) return;
+    const outgoingId = swapForId;
+    swapForId = null;
+    const replaced: RecommendedExercise[] = exercises.map((ex) =>
+      ex.exercise_id === outgoingId
+        ? {
+            exercise_id: alt.exercise_id,
+            name: alt.name,
+            // The slot's set COUNT is the muscle's volume — it stays; the
+            // prescription is the alternative's OWN Progression.
+            target_sets: ex.target_sets,
+            target_reps: alt.target_reps,
+            target_weight_kg: alt.target_weight_kg,
+            is_starting_point: alt.is_starting_point,
+            primary_muscles: alt.primary_muscles,
+            secondary_muscles: alt.secondary_muscles,
+          }
+        : ex,
+    );
+    today = { ...today, exercises: replaced };
+    swapped = true;
+  }
+
+  async function applyExclude() {
+    if (!swapForId) return;
+    const id = swapForId;
+    swapForId = null;
+    try {
+      await api.put(`/api/exercises/${id}/exclusion`);
+      // The engine now avoids it — regenerate today so the slot refills honestly.
+      swapped = false;
+      await load();
+    } catch {
+      error = "Couldn't save the exclusion — check your connection and retry.";
+    }
+  }
+
+  function swapTargetName(): string {
+    return exercises.find((e) => e.exercise_id === swapForId)?.name ?? '';
   }
 
   // Remember the last applied request so "Start" re-applies it server-side
@@ -203,17 +296,26 @@
                 </p>
               {/if}
             </div>
-            <div class="shrink-0 text-right">
-              <p class="text-sm font-semibold text-primary-300 tabular-nums">
-                {ex.target_sets} × {ex.target_reps}
-              </p>
-              <p class="text-xs text-surface-400 tabular-nums">
-                {#if ex.is_starting_point}
-                  pick a weight
-                {:else}
-                  {formatWeight(ex.target_weight_kg)} kg
-                {/if}
-              </p>
+            <div class="shrink-0 flex items-start gap-2.5">
+              <div class="text-right">
+                <p class="text-sm font-semibold text-primary-300 tabular-nums">
+                  {ex.target_sets} × {ex.target_reps}
+                </p>
+                <p class="text-xs text-surface-400 tabular-nums">
+                  {#if ex.is_starting_point}
+                    pick a weight
+                  {:else}
+                    {formatWeight(ex.target_weight_kg)} kg
+                  {/if}
+                </p>
+              </div>
+              <button
+                onclick={() => (swapForId = ex.exercise_id)}
+                class="p-1.5 -mr-1 rounded-lg text-surface-500 hover:text-surface-200 hover:bg-surface-700 transition-colors"
+                aria-label="Swap {ex.name}"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" /></svg>
+              </button>
             </div>
           </div>
         </li>
@@ -275,6 +377,15 @@
     </div>
   {/if}
 </div>
+
+<SwapSheet
+  open={swapForId !== null}
+  exerciseName={swapTargetName()}
+  alternatives={swapForId ? (altsByExercise[swapForId] ?? null) : null}
+  onpick={applySwap}
+  onexclude={applyExclude}
+  onclose={() => (swapForId = null)}
+/>
 
 <!-- Sticky start bar -->
 {#if !loading && !isEmpty}

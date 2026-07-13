@@ -260,6 +260,13 @@ export interface RestPref {
   effective_rest_seconds: number;
 }
 
+/** One Excluded Exercise (GET /api/exercises/exclusions) — "never recommend". */
+export interface Exclusion {
+  exercise_id: string;
+  name: string;
+  equipment: string | null;
+}
+
 // --- Freestyle Recommendation ("generate me a workout", #11) ---
 
 /** One prescribed Exercise in a proposal: target sets × reps × weight. */
