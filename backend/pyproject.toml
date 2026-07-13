@@ -16,6 +16,9 @@ dependencies = [
     # Symmetric authenticated encryption (Fernet) for per-user Connection
     # credentials stored encrypted at rest (BYOT integrations — connections).
     "cryptography>=44,<46",
+    # Web Push with VAPID for the rest-timer's locked-phone / mirrored-Watch
+    # notifications (ADR-0010).
+    "pywebpush>=2,<3",
 ]
 
 [project.optional-dependencies]

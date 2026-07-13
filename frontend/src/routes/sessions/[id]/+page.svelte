@@ -16,6 +16,8 @@
     swappedOrder,
     type SwapAlternative,
   } from '$lib/swap';
+  import { PUSH_ENABLED_KV } from '$lib/push';
+  import { cancelPushTimer, schedulePushTimer } from '$lib/push-client';
   import type { GymEquipment } from '$lib/plates';
   import {
     celebratablePrs,
@@ -278,7 +280,29 @@
 
   function startRestFor(exerciseId: string) {
     restDuration = restByExercise[exerciseId] ?? 120;
+    restExerciseId = exerciseId;
     restSignal += 1; // bump → RestTimer (re)starts
+  }
+
+  // --- Rest-timer Web Push (ADR-0010): the locked-phone / Watch cue. ---
+  // The in-page timer stays primary; when the user enabled notifications
+  // (Settings), every countdown also schedules a server push at its end
+  // instant, and skip / adjust / on-screen completion keeps it in sync. All
+  // best-effort: offline just means no push (the accepted degradation).
+  let pushEnabled = $state(false);
+  let restExerciseId = $state<string | null>(null);
+  $effect(() => {
+    void getKV<boolean>(PUSH_ENABLED_KV).then((v) => (pushEnabled = v ?? false));
+  });
+
+  function handleRestEndsAt(endsAtMs: number | null) {
+    if (!pushEnabled) return;
+    if (endsAtMs === null) {
+      void cancelPushTimer();
+      return;
+    }
+    const label = restExerciseId ? exerciseName(restExerciseId) : 'your next set';
+    void schedulePushTimer(sessionId, endsAtMs, label);
   }
 
   // --- Blocks: standalone exercise runs + superset alternation groups. ---
@@ -506,6 +530,7 @@
     if (!session || finishing) return;
     finishing = true;
     haptic('finish');
+    if (pushEnabled) void cancelPushTimer(); // no rest cue after the last set
     await store.finish();
     await goto('/sessions');
   }
@@ -751,7 +776,7 @@
 {#if session?.is_active}
   <div class="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom))] lg:bottom-0 inset-x-0 z-20 p-3 space-y-2 bg-gradient-to-t from-surface-950 via-surface-950/95 to-transparent">
     <div class="max-w-3xl mx-auto lg:pl-64 space-y-2">
-      <RestTimer startSignal={restSignal} startDuration={restDuration} />
+      <RestTimer startSignal={restSignal} startDuration={restDuration} onendsat={handleRestEndsAt} />
       <button
         onclick={finish}
         disabled={finishing}

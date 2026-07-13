@@ -77,6 +77,10 @@ export default defineConfig({
             }
           }
         ],
+        // Web Push handlers (ADR-0010) ride into the generated worker without
+        // an injectManifest migration: push-sw.js (static/) adds the push +
+        // notificationclick listeners for the rest-timer notifications.
+        importScripts: ['push-sw.js'],
         // A new SW takes over immediately so an install/update is never stuck
         // behind an old shell. Safe for shell-only caching (no data in flight).
         skipWaiting: true,

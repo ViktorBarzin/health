@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     # unprotected — fail closed, never plaintext.
     CONNECTION_ENCRYPTION_KEY: str | None = None
 
+    # Web Push (ADR-0010): the VAPID identity the rest-timer notifications are
+    # signed with — the only mechanism that reaches a locked iPhone (and, via OS
+    # mirroring, a paired Apple Watch) from the PWA. Generate once with the
+    # py-vapid CLI (``vapid --gen`` → applicationServerKey + private key) and
+    # supply from Vault secret/health-push. PUBLIC key is the URL-safe base64
+    # uncompressed P-256 point the browser passes to PushManager.subscribe();
+    # SUBJECT is a ``mailto:`` contact (RFC 8292). ALL THREE unset/partial ⇒ the
+    # push feature is disabled (config endpoint reports it, writes 503) — fail
+    # closed, mirroring CONNECTION_ENCRYPTION_KEY.
+    PUSH_VAPID_PRIVATE_KEY: str | None = None
+    PUSH_VAPID_PUBLIC_KEY: str | None = None
+    PUSH_VAPID_SUBJECT: str | None = None
+
     # Observability (perf-telemetry). Logs go to stdout in a logfmt-style
     # key=value format and are scraped by the cluster's Loki — so structured,
     # LogQL-parseable lines, no HTTP log shipper.

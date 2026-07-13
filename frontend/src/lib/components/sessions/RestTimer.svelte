@@ -8,7 +8,9 @@
   // Rest timer (#7): a mobile-first, non-blocking countdown that auto-starts when
   // a Set is logged and fires a sound + vibration on completion. The COUNTDOWN
   // LOGIC is the pure reducer (lib/rest-timer.ts); this component owns only the
-  // side-effects — a 250ms tick interval, the WebAudio beep, and navigator.vibrate.
+  // side-effects — a 250ms tick interval, the WebAudio beep, navigator.vibrate,
+  // and the `onendsat` signal the page turns into a server-scheduled Web Push
+  // (the locked-phone / Apple Watch cue, ADR-0010).
   //
   // Controlled by the parent via `startSignal`: bumping it (with a duration)
   // starts/restarts the timer. The bar pins above the finish bar and never blocks
@@ -17,7 +19,20 @@
   let {
     startSignal = 0,
     startDuration = 120,
-  }: { startSignal?: number; startDuration?: number } = $props();
+    onendsat,
+  }: {
+    startSignal?: number;
+    startDuration?: number;
+    /**
+     * Fires whenever the countdown's end instant changes: an epoch-ms when a
+     * countdown is (re)started or adjusted, null when it's skipped — or when
+     * it completes with the page VISIBLE (the in-page cue just fired, so the
+     * parent cancels the scheduled server push; a frozen/locked page never
+     * reaches this, which is exactly when the push should get through —
+     * ADR-0010).
+     */
+    onendsat?: (endsAtMs: number | null) => void;
+  } = $props();
 
   let timer = $state<RestTimerState>(idleTimer());
   let interval: ReturnType<typeof setInterval> | null = null;
@@ -33,6 +48,7 @@
         durationSec: startDuration,
         now: Date.now(),
       });
+      onendsat?.(timer.endsAt);
       ensureTicking();
     }
   });
@@ -60,6 +76,12 @@
       navigator.vibrate?.([200, 80, 200]);
     } catch {
       // ignore — vibration is best-effort
+    }
+    // The user just saw/heard the in-page cue — cancel the server push so a
+    // duplicate banner doesn't land on a lit screen. A locked phone freezes
+    // this code, so the push correctly survives there (ADR-0010).
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      onendsat?.(null);
     }
   }
 
@@ -95,12 +117,14 @@
   function skip() {
     timer = restTimerReducer(timer, { type: 'skip' });
     stopTicking();
+    onendsat?.(null);
   }
 
   function adjust(deltaSec: number) {
     timer = restTimerReducer(timer, { type: 'adjust', deltaSec, now: Date.now() });
     // Subtracting can drive the timer to zero — fire completion just like a tick.
     if (timer.justCompleted) onComplete();
+    else onendsat?.(timer.endsAt);
     if (timer.running) ensureTicking();
     else stopTicking();
   }

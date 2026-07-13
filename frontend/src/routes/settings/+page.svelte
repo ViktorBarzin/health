@@ -8,6 +8,7 @@
   import FitbodImport from '$lib/components/import/FitbodImport.svelte';
   import Exclusions from '$lib/components/settings/Exclusions.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
+  import TimerNotifications from '$lib/components/settings/TimerNotifications.svelte';
   import ExportData from '$lib/components/settings/ExportData.svelte';
   import Connections from '$lib/components/settings/Connections.svelte';
 
@@ -44,6 +45,15 @@
       <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
     </div>
     <GymProfileSettings />
+  </section>
+
+  <!-- Rest-timer notifications (Web Push, ADR-0010) -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Notifications</h2>
+      <p class="text-sm text-surface-500 mt-1">Get the rest-timer cue on the lock screen (and your watch) when the phone is pocketed mid-workout.</p>
+    </div>
+    <TimerNotifications />
   </section>
 
   <!-- Excluded exercises (CONTEXT.md "Exclusion") -->
