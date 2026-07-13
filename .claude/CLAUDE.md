@@ -48,11 +48,12 @@ backend/app/
 │   ├── export.py     # /api/export — streamed full per-user data archive (ZIP of JSON+CSV, #19)
 │   ├── sessions.py   # /api/sessions — Session/Set logging CRUD + set add/edit/delete/reorder/finish
 │   ├── principles.py # /api/principles — browse/scope-by-(goal,experience)/lookup-by-key (cited KB)
-│   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated) + adjust preview/start
+│   ├── recommendations.py # /api/recommendations — freestyle + today (autoregulated; ?day_index=/?muscles= overrides) + adjust + shape + explicit WYSIWYG start
 │   ├── programs.py   # /api/programs — generate (quiz/preset)/list/active/get/activate/delete (#13)
 │   ├── readiness.py  # /api/readiness — daily biometric 0–100 signal (HRV/RHR/sleep vs baseline) (#14)
 │   ├── nutrition.py  # /api/nutrition — Food catalog + Diary CRUD + day/history (#21); barcode→OFF, custom Foods, Recipes (#22)
-│   └── connections.py # /api/connections — per-user BYOT integrations: list/connect(paste token)/sync-now/disconnect (Oura, ADR-0006)
+│   ├── connections.py # /api/connections — per-user BYOT integrations: list/connect(paste token)/sync-now/disconnect (Oura, ADR-0006)
+│   └── push.py       # /api/push — Web Push (ADR-0010): config/subscriptions + rest-timer schedule/cancel
 ├── core/
 │   ├── dependencies.py # get_current_user (X-authentik-email → get-or-create User)
 │   └── exceptions.py
@@ -68,6 +69,12 @@ backend/app/
 │   ├── effort.py      # Pure Effort RIR↔RPE mapping (one-tap chip ↔ stored RPE-equivalent)
 │   ├── volume.py      # Pure volume helper (encodes the non-normal-set exclusion)
 │   ├── e1rm.py        # Pure estimated-1RM core (1-rep-anchored Epley + optional RIR adjust)
+│   ├── swap.py        # Pure Swap ranking core: ranked same-primary-muscle equivalents (fitbod-exit ①)
+│   ├── swap_query.py  # Swap DB glue: pool + history + Recovery → rank_alternatives (alternatives endpoint)
+│   ├── exclusion.py   # Exclusion filter: one shared not-excluded clause every generator path applies
+│   ├── duration.py    # Pure duration shaper: fit today into N minutes via the bounded adjust levers (fitbod-exit ③)
+│   ├── push.py        # Web Push send core: VAPID config (fail-closed) + classified one-shot send (ADR-0010)
+│   ├── push_query.py  # Push DB glue: subscriptions upsert, one-pending-per-user timer, SKIP LOCKED delivery
 │   ├── pr.py          # Pure PR detection (4 dimensions; normal-only; strict-improvement)
 │   ├── pr_service.py  # PR persistence: prior-bests-from-history + authoritative upsert
 │   ├── readiness.py   # Pure daily biometric Readiness core (HRV/RHR/sleep vs baseline) (#14)
@@ -122,6 +129,9 @@ backend/app/
 | `diary_entries` | id (UUID) | (user_id, entry_date) |
 | `recipes` | id (UUID) | UNIQUE(food_id), (user_id) |
 | `connections` | id (UUID) | UNIQUE(user_id, provider) |
+| `user_exercise_prefs` | id | UNIQUE(user_id, exercise_id) — per-user rest default + `excluded` (Exclusion) |
+| `push_subscriptions` | id (UUID) | UNIQUE(endpoint), (user_id) |
+| `push_timers` | user_id (one pending per user) | (fire_at) |
 | `recipe_ingredients` | id (UUID) | (recipe_id), (food_id) |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
@@ -521,6 +531,39 @@ single-app OAuth). The framework + one reference provider (Oura), structured so 
   credential is the username/password it logs in with, labelled unofficial. Both reuse the SAME encrypted-credential storage,
   idempotent ingest, Source/ImportBatch bookkeeping, sync endpoint, scheduler, and UI — only the connector class is new.
 
+**Fitbod-exit gym toolkit** (plan docs/plans/2026-07-13-fitbod-exit-gym-pwa.md; CONTEXT.md
+"Swap"/"Exclusion"; ADR-0010). Four in-gym affordances over the existing engine:
+- **Swap** (①): every Recommendation surface + the live Session offer ranked equivalents for one
+  slot — pure `services/swap.py` (shared-primary-muscle > has-history > freshness > stable id;
+  equipment hard filter; prescription from the alternative's OWN Progression; slot set count stays)
+  behind `GET /api/exercises/{id}/alternatives` (`?exclude=` = today's other ids). The client
+  PREFETCHES per visible Exercise into IndexedDB (`alts:{id}`), so the SwapSheet opens through a
+  signal drop; a mid-Session swap = delete+add+reorder op-queue verbs (pure `lib/swap.ts` plan) —
+  fully offline. **Exclusion**: "don't suggest again" (two-tap) sets `excluded` on the existing
+  `user_exercise_prefs` row; ONE shared SQL clause (`services/exclusion.py`) filters every
+  generator path (freestyle candidates, Program slots, alternatives pool) exactly like Gym
+  Profile equipment; managed under Settings → Excluded exercises. Explicit only — never inferred
+  (ADR-0002). A swapped/shaped/overridden preview starts via **`POST /api/recommendations/start`**
+  (WYSIWYG: instantiate exactly the displayed slots, visibility-checked) instead of a regenerate.
+- **Rest-timer Web Push** (②, ADR-0010): logging a Set online also schedules a server push at the
+  countdown's end (`POST/DELETE /api/push/rest-timer`, ONE pending per user, replaced on
+  reschedule); skip/adjust/early-log/visible-completion cancel it, so the push only lands when the
+  page was frozen (= phone locked, exactly the case that needs it; iOS mirrors it to a paired
+  Watch). Delivery: `push_timers` rows claimed `FOR UPDATE SKIP LOCKED` + deleted in the sending
+  transaction by a 1 s asyncio poller in every replica (`main.py` lifespan) → at-most-once, no
+  retries (a late rest cue is worthless). Subscriptions upsert by endpoint; 404/410 prunes.
+  VAPID identity fails closed (`PUSH_VAPID_*`); `GET /api/push/config` tells the client to hide
+  the toggle. SW stays `generateSW` — `static/push-sw.js` rides in via workbox `importScripts`.
+  Settings → Notifications owns the iOS user-gesture permission flow (installed PWA only).
+- **Duration shaper** (③): `POST /api/recommendations/shape {minutes}` — pure `services/duration.py`
+  picks the (exercise count, volume scale ≤ 1) using the most of the budget (setup 90 s + work
+  40 s/set + rest between sets), applied via the EXISTING bounded adjust pipeline; honest
+  "runs over" note when nothing fits. Today gets 30/45/60-min chips.
+- **Day-type override** (④): `GET /api/recommendations/today?day_index=` previews any active-Program
+  day through the same autoregulation (pointer never moves — reflow self-heals); `?muscles=` is the
+  freestyle muscle-group focus (validated against the typed dimension). Today gets a "Train a
+  different day?" picker (Program day pills / Push-Pull-Legs-Core groups).
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -645,6 +688,9 @@ frontend/src/
 │   ├── api.ts          # API client (fetch with credentials: include)
 │   ├── types.ts        # TypeScript interfaces
 │   ├── pr.ts           # PR detection + e1RM (TS mirror of backend services/{e1rm,pr}.py)
+│   ├── swap.ts         # Pure Swap plan: incoming Sets + swapped order (op-queue verbs, offline-capable; vitest)
+│   ├── push.ts         # Pure Web Push helpers: applicationServerKey decode, support detect (vitest)
+│   ├── push-client.ts  # Push IO glue: subscribe/unsubscribe + best-effort rest-timer schedule/cancel
 │   ├── fitbod.ts       # Pure looksLikeFitbodCsv header-sniff (reject wrong file pre-upload, vitest) (#9)
 │   ├── nutrition.ts    # Pure macro view-logic: scale/format/split + history→chart series (vitest) (#21)
 │   ├── barcode.ts      # Pure scan logic: normalize/validate barcode, engine pick, ScanDebouncer (vitest) (#22)
@@ -661,7 +707,8 @@ frontend/src/
 │   │   ├── charts/     # BarChart, TimeSeriesChart, Sparkline, ActivityRings, etc.
 │   │   ├── dashboard/  # MetricCard, TodaySummary, SleepSummary, RecentWorkouts
 │   │   ├── import/     # XmlUpload, ImportStatus, FitbodImport (CSV → preview → resolve → commit, #9)
-│   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator
+│   │   ├── sessions/   # ExercisePicker, SetTypeChip, EffortChips (RIR), PRCelebration, SyncIndicator,
+│   │   │               #   SwapSheet (ranked equivalents + exclude, fitbod-exit ①), RestTimer (+ onendsat → push)
 │   │   ├── nutrition/  # AddEntrySheet (search/scan/custom/recipe → quantity + Meal → save/edit, #21/#22),
 │   │   │               #   BarcodeScanner (native BarcodeDetector + @zxing fallback), CustomFoodForm, RecipeBuilder (#22),
 │   │   │               #   BudgetCard (Goal-driven target vs logged → remaining + macro bars + weight trend, #23)
@@ -704,8 +751,9 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `f6a7b8c9d0e1`
-(`add metric_daily rollup table`, ADR-0009; chains off `e5f6a7b8c9d0` connections).
+Alembic migrations in `backend/alembic/versions/`. Current head: `b8c9d0e1f2a3`
+(`add web push tables`, ADR-0010; chains f6a7b8c9d0e1 → a7b8c9d0e1f2 (`excluded`
+flag on user_exercise_prefs) → b8c9d0e1f2a3).
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
@@ -742,6 +790,12 @@ CONNECTION_ENCRYPTION_KEY=...  # Fernet key (URL-safe base64 32-byte) encrypting
                        #   value on the app AND the sync CronJob. Comma-separated
                        #   list = key rotation (new,old). UNSET ⇒ Connections
                        #   disabled (API 503) — fail closed, never store plaintext.
+PUSH_VAPID_PRIVATE_KEY=...  # Web Push (ADR-0010): VAPID identity signing the
+PUSH_VAPID_PUBLIC_KEY=...   #   rest-timer notifications (the locked-iPhone /
+PUSH_VAPID_SUBJECT=...      #   mirrored-Apple-Watch cue). Prod: Vault
+                       #   secret/health (push_vapid_*) via the kv ExternalSecret.
+                       #   ANY unset ⇒ push disabled (config reports it, writes
+                       #   503) — fail closed like CONNECTION_ENCRYPTION_KEY.
 LOG_LEVEL=...          # Observability (perf-telemetry): level for the app's own
                        #   loggers (app.request / app.slow_query). Default INFO;
                        #   uvicorn's loggers are left untouched.
