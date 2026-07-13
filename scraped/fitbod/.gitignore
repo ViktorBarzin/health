@@ -1,0 +1,4 @@
+# The full dataset contains Fitbod's copyrighted prose (descriptions,
+# instructions) — kept out of the GitHub-mirrored repo pending an explicit
+# licensing decision (see README.md). Regenerate: scrape_fitbod.py parse.
+fitbod_exercises.json

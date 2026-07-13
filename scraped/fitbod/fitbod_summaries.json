@@ -1,0 +1,101 @@
+{
+ "balance-trainer-lateral-jumps": {
+  "slug": "balance-trainer-lateral-jumps",
+  "name": "Balance Trainer Lateral Jumps",
+  "primaryMuscleGroups": [
+   "calves"
+  ],
+  "level": "beginner",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-narrow-push-up": {
+  "slug": "balance-trainer-narrow-push-up",
+  "name": "Balance Trainer Narrow Push Up",
+  "primaryMuscleGroups": [
+   "chest"
+  ],
+  "level": "advanced",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-single-leg-crunches": {
+  "slug": "balance-trainer-single-leg-crunches",
+  "name": "Balance Trainer Single Leg Crunches",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-single-leg-lifts": {
+  "slug": "balance-trainer-single-leg-lifts",
+  "name": "Balance Trainer Single Leg Lifts",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-slow-climbers": {
+  "slug": "balance-trainer-slow-climbers",
+  "name": "Balance Trainer Slow Climbers",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-speed-climbers": {
+  "slug": "balance-trainer-speed-climbers",
+  "name": "Balance Trainer Speed Climbers",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-star-plank-knee-to-elbow": {
+  "slug": "balance-trainer-star-plank-knee-to-elbow",
+  "name": "Balance Trainer Star Plank Knee to Elbow",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "advanced",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-traveling-dome-planks": {
+  "slug": "balance-trainer-traveling-dome-planks",
+  "name": "Balance Trainer Traveling Dome Planks",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ },
+ "balance-trainer-walk-out-plank": {
+  "slug": "balance-trainer-walk-out-plank",
+  "name": "Balance Trainer Walk Out Plank",
+  "primaryMuscleGroups": [
+   "abs"
+  ],
+  "level": "intermediate",
+  "equipment": [
+   "BOSU® Balance Trainer"
+  ]
+ }
+}
