@@ -17,17 +17,20 @@ the previewed proposal for unchanged data. Scoped to ``get_current_user``.
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.sessions import _detail
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.models.exercise import Exercise
 from app.models.user import User
 from app.schemas.recommendation import (
     AdjustRequest,
     AdjustResponse,
     AutoregulationRead,
+    ExplicitStartRequest,
     ProgramContext,
     RecommendationResponse,
     RecommendedExerciseRead,
@@ -40,6 +43,8 @@ from app.services.program_recommendation import ProgramRecommendation
 from app.services.recommendation import (
     DEFAULT_EXERCISE_COUNT,
     DEFAULT_SETS_PER_EXERCISE,
+    Recommendation,
+    RecommendedExercise,
 )
 from app.services.recommendation_query import (
     adjust_today,
@@ -199,6 +204,57 @@ async def start_today(
     """
     now = datetime.now(timezone.utc)
     recommendation, _ = await recommend_today(db, user.id, now=now)
+    session = await instantiate_session(db, user.id, recommendation)
+    return _detail(session)
+
+
+@router.post(
+    "/start",
+    response_model=SessionDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_explicit(
+    payload: ExplicitStartRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SessionDetail:
+    """Start exactly the proposal the client displays (the WYSIWYG path).
+
+    Used whenever the displayed proposal has diverged from a deterministic
+    regenerate — a Swapped slot, a shaped day. Every Exercise id is
+    visibility-checked (global ∪ own → else 404); the Session is instantiated
+    with the sent slots verbatim, and the user's edits keep winning from there.
+    """
+    ids = {item.exercise_id for item in payload.exercises}
+    visible = (
+        await db.execute(
+            select(Exercise.id).where(
+                Exercise.id.in_(ids),
+                or_(Exercise.user_id.is_(None), Exercise.user_id == user.id),
+            )
+        )
+    ).scalars()
+    missing = ids - set(visible)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Exercise not found"
+        )
+
+    recommendation = Recommendation(
+        exercises=[
+            RecommendedExercise(
+                exercise_id=item.exercise_id,
+                name="",
+                target_sets=item.target_sets,
+                target_reps=item.target_reps,
+                target_weight_kg=item.target_weight_kg,
+                is_starting_point=False,
+                primary_muscles=(),
+                secondary_muscles=(),
+            )
+            for item in payload.exercises
+        ]
+    )
     session = await instantiate_session(db, user.id, recommendation)
     return _detail(session)
 

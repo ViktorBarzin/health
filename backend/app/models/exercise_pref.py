@@ -14,7 +14,7 @@ per-user knobs (#11) can join it without a new table.
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, UniqueConstraint, false
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,4 +48,10 @@ class ExercisePref(Base):
     # the user hasn't overridden it → the app's global default applies.
     default_rest_seconds: Mapped[int | None] = mapped_column(
         Integer, nullable=True
+    )
+    # Exclusion (CONTEXT.md): "never recommend this Exercise again". Filters every
+    # generator path exactly like Gym Profile equipment; explicit only — never
+    # inferred from Swap behaviour (ADR-0002 determinism).
+    excluded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
     )

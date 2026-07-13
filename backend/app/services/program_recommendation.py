@@ -53,6 +53,7 @@ from app.services.autoregulation import (
     autoregulate_day,
 )
 from app.services.effort import rpe_to_rir
+from app.services.exclusion import not_excluded_clause
 from app.services.program_generation import sets_for_slot
 from app.services.progression import SetPerformance, next_target
 from app.services.recommendation import (
@@ -201,6 +202,8 @@ async def _exercises_for_muscle(
             ExerciseMuscle.muscle == muscle,
             ExerciseMuscle.role == MuscleRole.primary,
             (Exercise.user_id == user_id) | (Exercise.user_id.is_(None)),
+            # Exclusions filter slot filling exactly like Gym Profile equipment.
+            not_excluded_clause(user_id),
         )
         .order_by(Exercise.id)
     )

@@ -97,3 +97,38 @@ class RestPrefUpdate(BaseModel):
 
     default_rest_seconds: int | None = Field(default=None, ge=5, le=1800)
     model_config = {"extra": "forbid"}
+
+
+class ExclusionRead(BaseModel):
+    """One Excluded Exercise (CONTEXT.md "Exclusion") — for the settings manager.
+
+    Enough to render and undo the mark: the Exercise's identity plus the
+    equipment label the list shows.
+    """
+
+    exercise_id: uuid.UUID
+    name: str
+    equipment: str | None = None
+
+
+class AlternativeRead(BaseModel):
+    """One ranked Swap equivalent (CONTEXT.md "Swap").
+
+    The prescription (``target_reps`` × ``target_weight_kg``) is the
+    alternative's OWN Progression — never the outgoing Exercise's numbers; the
+    slot's set COUNT stays client-side (volume belongs to the slot's muscle).
+    ``shared_muscles`` powers the "hits the same chest" line;
+    ``is_starting_point`` flags a first-guess weight; ``has_history`` marks a
+    movement the user has actually trained.
+    """
+
+    exercise_id: uuid.UUID
+    name: str
+    equipment: str | None = None
+    target_reps: int
+    target_weight_kg: float
+    is_starting_point: bool
+    has_history: bool
+    primary_muscles: list[str] = []
+    secondary_muscles: list[str] = []
+    shared_muscles: list[str] = []

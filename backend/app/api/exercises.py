@@ -8,6 +8,7 @@ seed (:mod:`app.services.seed_exercises`).
 """
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Select, or_, select
@@ -19,6 +20,8 @@ from app.models.exercise import Exercise, ExerciseMuscle, Muscle, MuscleRole
 from app.models.exercise_pref import DEFAULT_REST_SECONDS, ExercisePref
 from app.models.user import User
 from app.schemas.exercises import (
+    AlternativeRead,
+    ExclusionRead,
     ExerciseCreate,
     ExerciseDetail,
     ExerciseSummary,
@@ -26,6 +29,8 @@ from app.schemas.exercises import (
     RestPrefRead,
     RestPrefUpdate,
 )
+from app.services.swap import DEFAULT_ALTERNATIVES
+from app.services.swap_query import alternatives_for_exercise
 
 router = APIRouter()
 
@@ -104,6 +109,34 @@ async def list_equipment(
     )
     result = await db.execute(stmt)
     return [row for row in result.scalars().all()]
+
+
+# NOTE: registered before the parametrized ``/{exercise_id}`` routes below so
+# the literal path wins the match.
+@router.get("/exclusions", response_model=list[ExclusionRead])
+async def list_exclusions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ExclusionRead]:
+    """The caller's Exclusions — Exercises the engine must never recommend.
+
+    The settings manager renders this list so every mark set from a SwapSheet
+    stays reviewable and reversible (CONTEXT.md "Exclusion").
+    """
+    stmt = (
+        select(Exercise.id, Exercise.name, Exercise.equipment)
+        .join(ExercisePref, ExercisePref.exercise_id == Exercise.id)
+        .where(
+            ExercisePref.user_id == user.id,
+            ExercisePref.excluded.is_(True),
+        )
+        .order_by(Exercise.name)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        ExclusionRead(exercise_id=r.id, name=r.name, equipment=r.equipment)
+        for r in rows
+    ]
 
 
 @router.post("/", response_model=ExerciseDetail, status_code=status.HTTP_201_CREATED)
@@ -241,6 +274,110 @@ async def set_rest_pref(
         if override is not None
         else DEFAULT_REST_SECONDS,
     )
+
+
+async def _pref_row(
+    db: AsyncSession, user_id: int, exercise_id: uuid.UUID
+) -> ExercisePref | None:
+    return (
+        await db.execute(
+            select(ExercisePref).where(
+                ExercisePref.user_id == user_id,
+                ExercisePref.exercise_id == exercise_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+@router.put("/{exercise_id}/exclusion", status_code=status.HTTP_204_NO_CONTENT)
+async def set_exclusion(
+    exercise_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Mark an Exercise "never recommend again" (idempotent).
+
+    Upserts the per-(user, exercise) preferences row — the same row the rest
+    pref lives on — so un-excluding later never loses an existing rest override.
+    """
+    await _assert_exercise_visible(db, exercise_id, user)
+    pref = await _pref_row(db, user.id, exercise_id)
+    if pref is None:
+        pref = ExercisePref(user_id=user.id, exercise_id=exercise_id)
+        db.add(pref)
+    pref.excluded = True
+    await db.flush()
+
+
+@router.delete("/{exercise_id}/exclusion", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_exclusion(
+    exercise_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Undo an Exclusion (idempotent — absent mark is already the goal state)."""
+    await _assert_exercise_visible(db, exercise_id, user)
+    pref = await _pref_row(db, user.id, exercise_id)
+    if pref is not None and pref.excluded:
+        pref.excluded = False
+        await db.flush()
+
+
+@router.get("/{exercise_id}/alternatives", response_model=list[AlternativeRead])
+async def list_alternatives(
+    exercise_id: uuid.UUID,
+    exclude: str | None = Query(
+        default=None,
+        description="Comma-separated Exercise ids already in today's plan.",
+    ),
+    limit: int = Query(default=DEFAULT_ALTERNATIVES, ge=1, le=20),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AlternativeRead]:
+    """Ranked Swap equivalents for an Exercise (CONTEXT.md "Swap").
+
+    Same-primary-muscle movements the caller's Gym Profile can equip, minus
+    Exclusions and anything in ``exclude``, ranked (muscle overlap → trained →
+    freshness) and prescribed off each alternative's OWN history. The client
+    prefetches these per visible Exercise so the SwapSheet opens instantly and
+    survives a mid-Session signal drop.
+    """
+    blocked: set[uuid.UUID] = set()
+    for raw in (exclude or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            blocked.add(uuid.UUID(raw))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"invalid exercise id in exclude: {raw!r}",
+            ) from exc
+
+    now = datetime.now(timezone.utc)
+    alternatives = await alternatives_for_exercise(
+        db, user.id, exercise_id, now=now, blocked_ids=frozenset(blocked), limit=limit
+    )
+    if alternatives is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Exercise not found"
+        )
+    return [
+        AlternativeRead(
+            exercise_id=a.exercise_id,
+            name=a.name,
+            equipment=a.equipment,
+            target_reps=a.target_reps,
+            target_weight_kg=a.target_weight_kg,
+            is_starting_point=a.is_starting_point,
+            has_history=a.has_history,
+            primary_muscles=list(a.primary_muscles),
+            secondary_muscles=list(a.secondary_muscles),
+            shared_muscles=list(a.shared_muscles),
+        )
+        for a in alternatives
+    ]
 
 
 def _custom_slug(name: str) -> str:

@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.exercise import Exercise, ExerciseMuscle, MuscleRole
 from app.models.gym_profile import DEFAULT_EQUIPMENT, GymProfile
 from app.models.training_session import SetType, TrainingSession, TrainingSet
+from app.services.exclusion import not_excluded_clause
 from app.services.adjust import (
     Adjustment,
     AdjustmentBounds,
@@ -160,6 +161,8 @@ async def _candidates(
             TrainingSession.started_at >= window_start,
             TrainingSet.weight_kg > 0,
             TrainingSet.reps > 0,
+            # Exclusions filter generation exactly like Gym Profile equipment.
+            not_excluded_clause(user_id),
         )
         # Newest first; within a Session the later (higher order_index) working
         # set is the freshest signal of where the lift currently is.

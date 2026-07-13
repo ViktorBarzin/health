@@ -111,6 +111,33 @@ class TodayRecommendationResponse(RecommendationResponse):
     program: ProgramContext | None = None
 
 
+class ExplicitExercise(BaseModel):
+    """One slot of an explicit (WYSIWYG) start — what the client displayed."""
+
+    exercise_id: uuid.UUID
+    target_sets: int = Field(ge=1, le=10)
+    target_reps: int = Field(ge=1, le=100)
+    target_weight_kg: float = Field(ge=0, le=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class ExplicitStartRequest(BaseModel):
+    """Start exactly the proposal the client shows (post-Swap, post-shaping).
+
+    The preview endpoints regenerate deterministically, but the moment the user
+    Swaps a slot client-side the displayed proposal diverges from what a
+    regenerate would produce — so Start sends the displayed slots verbatim and
+    the server instantiates them (visibility-checked; same bounds as the tunable
+    preview). Equivalent authority to logging the Sets by hand — the engine's
+    receipts belong to the preview, not this instantiation.
+    """
+
+    exercises: list[ExplicitExercise] = Field(min_length=1, max_length=12)
+
+    model_config = {"extra": "forbid"}
+
+
 class AdjustRequest(BaseModel):
     """A conversational adjust request — free-text the provider maps to levers.
 
