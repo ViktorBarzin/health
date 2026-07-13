@@ -225,14 +225,20 @@ async def recommend_for_user(
     now: dt.datetime,
     exercise_count: int = DEFAULT_EXERCISE_COUNT,
     sets_per_exercise: int = DEFAULT_SETS_PER_EXERCISE,
+    focus_muscles: list[str] | None = None,
 ) -> Recommendation:
     """Generate today's freestyle Recommendation for a user.
 
     Assembles the user's trained-Exercise candidates, their per-muscle Recovery,
     and their Gym Profile equipment, then runs the pure deterministic generator.
-    ``now`` is injected so a fixed DB state yields a fixed proposal.
+    ``focus_muscles`` (plan ④: "just legs today") keeps only candidates with a
+    matching PRIMARY mover. ``now`` is injected so a fixed DB state yields a
+    fixed proposal.
     """
     candidates = await _candidates(db, user_id, now=now)
+    if focus_muscles:
+        focus = set(focus_muscles)
+        candidates = [c for c in candidates if focus & set(c.primary_muscles)]
     recovery = await _recovery_map(db, user_id, now=now)
     equipment = await _gym_equipment(db, user_id)
     return generate_recommendation(
@@ -249,8 +255,17 @@ async def recommend_for_user(
 _DELOAD_LOOKBACK_DAYS = 7
 
 
+class DayOverrideError(ValueError):
+    """An override that doesn't apply: bad day index, or wrong generation mode."""
+
+
 async def recommend_today(
-    db: AsyncSession, user_id: int, *, now: dt.datetime
+    db: AsyncSession,
+    user_id: int,
+    *,
+    now: dt.datetime,
+    day_index_override: int | None = None,
+    focus_muscles: list[str] | None = None,
 ) -> tuple[Recommendation, ProgramRecommendation | None]:
     """Today's Recommendation, drawn from the active Program if one exists.
 
@@ -267,6 +282,17 @@ async def recommend_today(
     """
     program = await active_program(db, user_id)
     if program is not None:
+        if focus_muscles:
+            raise DayOverrideError(
+                "muscle focus applies to freestyle only — with an active "
+                "Program, pick one of its days (day_index)"
+            )
+        if day_index_override is not None and not any(
+            d.day_index == day_index_override for d in program.days
+        ):
+            raise DayOverrideError(
+                f"day_index {day_index_override} is not a day of the active Program"
+            )
         readiness = await readiness_for_user(db, user_id, now=now)
         recent = await recent_daily_readiness(
             db, user_id, now=now, days=_DELOAD_LOOKBACK_DAYS
@@ -279,9 +305,14 @@ async def recommend_today(
             now=now,
             readiness=readiness.score,
             early_deload=early_deload,
+            day_index_override=day_index_override,
         )
         return program_rec.recommendation, program_rec
-    freestyle = await recommend_for_user(db, user_id, now=now)
+    if day_index_override is not None:
+        raise DayOverrideError("no active Program — a day override doesn't apply")
+    freestyle = await recommend_for_user(
+        db, user_id, now=now, focus_muscles=focus_muscles
+    )
     return freestyle, None
 
 

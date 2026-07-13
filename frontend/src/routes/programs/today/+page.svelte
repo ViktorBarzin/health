@@ -7,6 +7,8 @@
   import type { SwapAlternative } from '$lib/swap';
   import type {
     AdjustResponse,
+    ProgramDay,
+    ProgramDetail,
     RecommendedExercise,
     SessionDetail,
     TodayRecommendationResponse,
@@ -34,12 +36,26 @@
     load();
   });
 
+  // Day-type override (plan ④): "give me push day today". A Program user picks
+  // one of the split's days; a freestyle user picks a muscle group. The
+  // pointer/schedule never moves — overridden previews start via the WYSIWYG
+  // path and the Program self-heals through the existing reflow.
+  let dayOverride = $state<number | null>(null);
+  let muscleFocus = $state<string | null>(null);
+
   async function load() {
     loading = true;
     error = '';
     adjustNote = '';
     try {
-      today = await api.get<TodayRecommendationResponse>('/api/recommendations/today');
+      const params = new URLSearchParams();
+      if (dayOverride !== null) params.set('day_index', String(dayOverride));
+      if (muscleFocus) params.set('muscles', muscleFocus);
+      const qs = params.size > 0 ? `?${params}` : '';
+      today = await api.get<TodayRecommendationResponse>(
+        `/api/recommendations/today${qs}`,
+      );
+      swapped = dayOverride !== null || muscleFocus !== null;
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to load today's workout";
     } finally {
@@ -169,6 +185,50 @@
     return exercises.find((e) => e.exercise_id === swapForId)?.name ?? '';
   }
 
+  // --- "Train a different day" (plan ④) ---
+  let dayPickerOpen = $state(false);
+  let programDays = $state<ProgramDay[] | null>(null);
+
+  // Freestyle muscle groups, mapped onto the dataset's 17 typed muscles.
+  const muscleGroups: Record<string, string[]> = {
+    Push: ['chest', 'shoulders', 'triceps'],
+    Pull: ['lats', 'middle back', 'biceps', 'traps', 'forearms'],
+    Legs: ['quadriceps', 'hamstrings', 'glutes', 'calves', 'abductors', 'adductors'],
+    Core: ['abdominals', 'lower back'],
+  };
+
+  async function toggleDayPicker() {
+    dayPickerOpen = !dayPickerOpen;
+    if (dayPickerOpen && ctx && programDays === null) {
+      try {
+        programDays = (await api.get<ProgramDetail>('/api/programs/active')).days;
+      } catch {
+        programDays = [];
+      }
+    }
+  }
+
+  async function pickDay(index: number) {
+    dayPickerOpen = false;
+    dayOverride = index;
+    muscleFocus = null;
+    await load();
+  }
+
+  async function pickMuscleGroup(group: string) {
+    dayPickerOpen = false;
+    muscleFocus = muscleGroups[group].join(',');
+    dayOverride = null;
+    await load();
+  }
+
+  async function clearOverride() {
+    dayPickerOpen = false;
+    dayOverride = null;
+    muscleFocus = null;
+    await load();
+  }
+
   // Remember the last applied request so "Start" re-applies it server-side
   // (deterministic with the deterministic provider; the LLM provider re-proposes).
   let lastRequest = $state('');
@@ -236,6 +296,65 @@
       {/if}
     </div>
   </div>
+
+  <!-- Day-type override (plan ④): train a different day than the pointer says. -->
+  {#if !loading && !isEmpty}
+    <div class="flex items-center justify-between">
+      <button
+        onclick={toggleDayPicker}
+        class="text-xs font-medium text-primary-400 hover:text-primary-300"
+      >
+        {dayPickerOpen ? 'Close' : 'Train a different day?'}
+      </button>
+      {#if dayOverride !== null || muscleFocus}
+        <button
+          onclick={clearOverride}
+          class="text-xs text-surface-400 hover:text-surface-200 underline underline-offset-2"
+        >
+          Back to today's plan
+        </button>
+      {/if}
+    </div>
+    {#if dayPickerOpen}
+      <div class="rounded-xl bg-surface-800 border border-surface-700 p-3">
+        {#if ctx}
+          {#if programDays === null}
+            <div class="h-8 bg-surface-700 rounded-lg animate-pulse"></div>
+          {:else if programDays.length === 0}
+            <p class="text-xs text-surface-500">Couldn't load the split's days.</p>
+          {:else}
+            <div class="flex flex-wrap gap-1.5">
+              {#each programDays as d (d.day_index)}
+                <button
+                  onclick={() => pickDay(d.day_index)}
+                  class="px-3 py-1.5 rounded-full text-xs font-medium transition-colors
+                         {dayOverride === d.day_index || (dayOverride === null && ctx.day_index === d.day_index)
+                    ? 'bg-primary-500 text-white'
+                    : 'bg-surface-700 hover:bg-surface-600 text-surface-200'}"
+                >
+                  {d.name}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <div class="flex flex-wrap gap-1.5">
+            {#each Object.keys(muscleGroups) as g (g)}
+              <button
+                onclick={() => pickMuscleGroup(g)}
+                class="px-3 py-1.5 rounded-full text-xs font-medium transition-colors
+                       {muscleFocus === muscleGroups[g].join(',')
+                  ? 'bg-primary-500 text-white'
+                  : 'bg-surface-700 hover:bg-surface-600 text-surface-200'}"
+              >
+                {g}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/if}
 
   {#if ctx?.is_deload}
     <div class="px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">

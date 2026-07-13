@@ -355,6 +355,7 @@ async def recommend_from_program(
     now: dt.datetime,
     readiness: float | None = None,
     early_deload: bool = False,
+    day_index_override: int | None = None,
 ) -> ProgramRecommendation:
     """Today's Recommendation drawn from the active Program's next due day.
 
@@ -370,7 +371,13 @@ async def recommend_from_program(
     """
     days_per_week = program.days_per_week
     started = await _session_count_since(db, user_id, program.created_at)
-    day_index = started % days_per_week if days_per_week else 0
+    # The next-due pointer, unless the user explicitly picked a day ("give me
+    # push day today", plan ④). An override never moves the pointer — it stays
+    # (#Sessions mod days/week), so the schedule self-heals via reflow.
+    if day_index_override is not None:
+        day_index = day_index_override
+    else:
+        day_index = started % days_per_week if days_per_week else 0
     day: ProgramDay | None = next(
         (d for d in program.days if d.day_index == day_index), None
     )

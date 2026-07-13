@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.sessions import _detail
 from app.core.dependencies import get_current_user
 from app.database import get_db
-from app.models.exercise import Exercise
+from app.models.exercise import Exercise, Muscle
 from app.models.user import User
 from app.schemas.recommendation import (
     AdjustRequest,
@@ -49,6 +49,7 @@ from app.services.recommendation import (
 )
 from app.services.duration import shape_to_duration
 from app.services.recommendation_query import (
+    DayOverrideError,
     adjust_today,
     instantiate_session,
     recommend_for_user,
@@ -167,6 +168,16 @@ def _program_context(program_rec: ProgramRecommendation) -> ProgramContext:
 
 @router.get("/today", response_model=TodayRecommendationResponse)
 async def preview_today(
+    day_index: int | None = Query(
+        default=None,
+        ge=0,
+        le=6,
+        description="Override the next-due Program day (plan ④: 'push day today').",
+    ),
+    muscles: str | None = Query(
+        default=None,
+        description="Freestyle-only: comma-separated muscle focus ('just legs').",
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TodayRecommendationResponse:
@@ -174,10 +185,21 @@ async def preview_today(
 
     When the user has an active Program, this is the Program's prescription for the
     next due training day (with the week/day/deload context); otherwise it falls
-    back to the deterministic freestyle generator. The unified daily entry point.
+    back to the deterministic freestyle generator. ``day_index`` previews a chosen
+    Program day instead (the pointer self-heals — an override never advances it);
+    ``muscles`` focuses a freestyle proposal on a muscle group. Starting an
+    overridden preview goes through the explicit ``/start`` path.
     """
+    focus = _parse_muscles(muscles)
     now = datetime.now(timezone.utc)
-    recommendation, program_rec = await recommend_today(db, user.id, now=now)
+    try:
+        recommendation, program_rec = await recommend_today(
+            db, user.id, now=now, day_index_override=day_index, focus_muscles=focus
+        )
+    except DayOverrideError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     base = _to_response(recommendation)
     if program_rec is not None:
         return TodayRecommendationResponse(
@@ -186,6 +208,25 @@ async def preview_today(
             program=_program_context(program_rec),
         )
     return TodayRecommendationResponse(exercises=base.exercises, source="freestyle")
+
+
+def _parse_muscles(raw: str | None) -> list[str] | None:
+    """Validate a comma-separated muscle list against the typed dimension."""
+    if raw is None:
+        return None
+    out: list[str] = []
+    for token in raw.split(","):
+        token = token.strip().lower()
+        if not token:
+            continue
+        try:
+            out.append(Muscle(token).value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown muscle: {token!r}",
+            ) from exc
+    return out or None
 
 
 @router.post(
