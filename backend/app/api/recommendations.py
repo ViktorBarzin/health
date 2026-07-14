@@ -136,7 +136,7 @@ async def start_freestyle(
     recommendation = await recommend_for_user(
         db, user.id, now=now, exercise_count=count, sets_per_exercise=sets
     )
-    session = await instantiate_session(db, user.id, recommendation)
+    session = await instantiate_session(db, user.id, recommendation, source="freestyle")
     return _detail(session)
 
 
@@ -246,8 +246,22 @@ async def start_today(
     instantiate path, whether the source was the Program or freestyle.
     """
     now = datetime.now(timezone.utc)
-    recommendation, _ = await recommend_today(db, user.id, now=now)
-    session = await instantiate_session(db, user.id, recommendation)
+    recommendation, program_rec = await recommend_today(db, user.id, now=now)
+    if program_rec is not None:
+        session = await instantiate_session(
+            db,
+            user.id,
+            recommendation,
+            source="program",
+            program_id=program_rec.program_id,
+            program_version=program_rec.program_version,
+            day_index=program_rec.day_index,
+            slot_muscles=program_rec.slot_muscles,
+        )
+    else:
+        session = await instantiate_session(
+            db, user.id, recommendation, source="freestyle"
+        )
     return _detail(session)
 
 
@@ -332,7 +346,7 @@ async def start_explicit(
             for item in payload.exercises
         ]
     )
-    session = await instantiate_session(db, user.id, recommendation)
+    session = await instantiate_session(db, user.id, recommendation, source="explicit")
     return _detail(session)
 
 
@@ -393,5 +407,14 @@ async def start_adjust(
     result = await adjust_today(
         db, user.id, payload.request, now=now, provider=get_adjust_provider()
     )
-    session = await instantiate_session(db, user.id, result.recommendation)
+    program_rec = result.program
+    session = await instantiate_session(
+        db,
+        user.id,
+        result.recommendation,
+        source="adjusted",
+        program_id=program_rec.program_id if program_rec else None,
+        program_version=program_rec.program_version if program_rec else None,
+        day_index=program_rec.day_index if program_rec else None,
+    )
     return _detail(session)

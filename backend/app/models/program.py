@@ -128,6 +128,24 @@ class Program(Base):
     # Receipt: {param_name: {principle_key, value, unit?, min?, max?}} — every
     # Program-level number's source Principle, for the #14 receipts UI.
     provenance: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # --- Block Review (ADR-0011) ---
+    # Bumped on every applied revision; Prescriptions record which version they
+    # were generated from, so Adherence is attributable to the right numbers.
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    # When the review engine last evaluated this Program (the cheap gate that
+    # keeps evaluate-on-read idempotent and rare).
+    reviewed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Block succession: the Program this one was auto-generated to follow (the
+    # block-boundary structural review) — the chain the receipts UI can walk.
+    parent_program_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("programs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -206,3 +224,48 @@ class ProgramMuscleVolume(Base):
     )
 
     program: Mapped["Program"] = relationship(back_populates="muscle_volumes")
+
+
+class RevisionTrigger(str, enum.Enum):
+    """What caused a Program revision (ADR-0011)."""
+
+    continuous_review = "continuous_review"  # the damped weekly-cadence tuning
+    block_review = "block_review"  # block-boundary structural succession
+    proposal = "proposal"  # an approved LLM Proposal (M5)
+
+
+class ProgramRevision(Base):
+    """One applied Block Review change set — the receipt (ADR-0011).
+
+    ``changes`` is a JSONB list of
+    ``{lever, target, from, to, reason, principle_key?, evidence}`` entries —
+    every automatic Program change readable with why it happened and which
+    Principle bounded it. ``version`` is the Program version AFTER applying.
+    """
+
+    __tablename__ = "program_revisions"
+    __table_args__ = (
+        Index("ix_program_revisions_program", "program_id", "version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    program_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("programs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[RevisionTrigger] = mapped_column(
+        SAEnum(
+            RevisionTrigger,
+            name="revision_trigger",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+    )
+    changes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

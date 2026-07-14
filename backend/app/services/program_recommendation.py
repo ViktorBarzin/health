@@ -101,6 +101,11 @@ class ProgramRecommendation:
     autoregulation: AdjustmentResult | None = None
     readiness: float | None = None
     early_deload: bool = False
+    #: The Program day's muscle per chosen slot (parallel to
+    #: recommendation.exercises) — labels the Prescription (ADR-0011).
+    slot_muscles: tuple[str, ...] = ()
+    #: The Program version the proposal was generated from (Block Review).
+    program_version: int = 1
 
 
 def _weeks_elapsed(created_at: dt.datetime, now: dt.datetime) -> int:
@@ -452,6 +457,8 @@ async def recommend_from_program(
         autoregulation=autoregulation,
         readiness=readiness,
         early_deload=early_deload,
+        slot_muscles=tuple(slot_muscles),
+        program_version=getattr(program, "version", 1) or 1,
     )
 
 

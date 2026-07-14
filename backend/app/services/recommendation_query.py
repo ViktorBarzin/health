@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -39,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.exercise import Exercise, ExerciseMuscle, MuscleRole
 from app.models.gym_profile import DEFAULT_EQUIPMENT, GymProfile
+from app.models.prescription import Prescription, PrescriptionSource
 from app.models.training_session import SetType, TrainingSession, TrainingSet
 from app.services.exclusion import not_excluded_clause
 from app.services.adjust import (
@@ -322,6 +324,11 @@ async def instantiate_session(
     recommendation: Recommendation,
     *,
     started_at: dt.datetime | None = None,
+    source: str = "freestyle",
+    program_id: uuid.UUID | None = None,
+    program_version: int | None = None,
+    day_index: int | None = None,
+    slot_muscles: Sequence[str | None] | None = None,
 ) -> TrainingSession:
     """Create a Session pre-filled with the proposal's target Sets.
 
@@ -331,6 +338,12 @@ async def instantiate_session(
     exactly as the live logger would create them, so the existing logging UI
     drives them unchanged and the user's edits simply overwrite the targets
     (user edits always win — there is no separate "prescribed" state to honour).
+
+    What DOES survive the user's edits is the **Prescription** (ADR-0011): an
+    immutable snapshot of the instantiated slots, written here for every start
+    path, so Adherence (performed vs planned) is measurable afterwards.
+    ``slot_muscles`` labels each slot with its Program-day muscle when known
+    (parallel to ``recommendation.exercises``).
 
     Returns the flushed Session with its Sets loaded.
     """
@@ -355,6 +368,28 @@ async def instantiate_session(
                 )
             )
             order_index += 1
+
+    muscles = list(slot_muscles) if slot_muscles is not None else []
+    db.add(
+        Prescription(
+            session_id=session.id,
+            user_id=user_id,
+            program_id=program_id,
+            program_version=program_version,
+            day_index=day_index,
+            source=PrescriptionSource(source),
+            slots=[
+                {
+                    "exercise_id": str(item.exercise_id),
+                    "muscle": muscles[i] if i < len(muscles) else None,
+                    "target_sets": item.target_sets,
+                    "target_reps": item.target_reps,
+                    "target_weight_kg": item.target_weight_kg,
+                }
+                for i, item in enumerate(recommendation.exercises)
+            ],
+        )
+    )
     await db.flush()
     await db.refresh(session, attribute_names=["sets"])
     return session

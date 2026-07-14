@@ -21,6 +21,8 @@ from app.models.principle import (
     TrainingGoal,
 )
 from app.models.program import (
+    ProgramRevision,
+    RevisionTrigger,
     Program,
     ProgramDay,
     ProgramMuscleVolume,
@@ -29,6 +31,7 @@ from app.models.program import (
 from app.models.food import Food
 from app.models.diary_entry import DiaryEntry, Meal
 from app.models.recipe import Recipe, RecipeIngredient
+from app.models.prescription import Prescription, PrescriptionSource
 from app.models.push import PushSubscription, PushTimer
 from app.models.connection import (
     Connection,
@@ -72,6 +75,10 @@ __all__ = [
     "Recipe",
     "RecipeIngredient",
     "Connection",
+    "Prescription",
+    "PrescriptionSource",
+    "ProgramRevision",
+    "RevisionTrigger",
     "PushSubscription",
     "PushTimer",
     "ConnectionProvider",
