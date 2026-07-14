@@ -1,6 +1,15 @@
 # Apple Health auto-sync — the push Connector (M7, decided with Viktor 2026-07-14)
 
-Status: **executing — shipped same day; awaiting Viktor's one-time iPhone setup**
+Status: **done (server side) — E2E-verified live; awaiting Viktor's one-time iPhone setup**
+
+Verified live 2026-07-14 against https://health-api.viktorbarzin.me/api/ingest/apple:
+missing/bad/spoofed-identity requests → 401; valid token + empty body → zero-counts JSON;
+junk lines skipped+counted; non-ingest routes 404 on the host; token last-used liveness
+sets. Two integration snags found and fixed during verification: the SvelteKit hop's
+global CSRF guard eats cross-origin text/plain POSTs → the ingest ingress now targets
+the FastAPI port directly (uvicorn off loopback, Service exposes 8000); and the
+ingress_factory auth-comment guard requires the justification directly above the
+`auth = "none"` line.
 
 Goal: after ONE manual export.zip bootstrap, health data imports itself — after every
 workout and every morning — with no taps, no paid apps, forever. This builds ADR-0006's
