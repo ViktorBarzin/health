@@ -15,6 +15,7 @@ Both regenerate from the same deterministic core, so the started Session matches
 the previewed proposal for unchanged data. Scoped to ``get_current_user``.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -48,6 +49,7 @@ from app.services.recommendation import (
     RecommendedExercise,
 )
 from app.services.duration import shape_to_duration
+from app.services.review_query import evaluate_active_program
 from app.services.recommendation_query import (
     DayOverrideError,
     adjust_today,
@@ -57,6 +59,8 @@ from app.services.recommendation_query import (
 )
 
 router = APIRouter()
+
+_review_logger = logging.getLogger("app.review")
 
 # Bounds on the tunable proposal size — a sane gym session, not an all-day plan.
 _MAX_EXERCISES = 12
@@ -192,6 +196,13 @@ async def preview_today(
     """
     focus = _parse_muscles(muscles)
     now = datetime.now(timezone.utc)
+    # Evaluate-on-read (ADR-0011): the Block Review looks at any newly finished
+    # Sessions before today's proposal is drawn — gated + damped inside, so
+    # this is near-free on repeat loads and never blocks the preview.
+    try:
+        await evaluate_active_program(db, user.id, now=now)
+    except Exception:
+        _review_logger.exception("block review evaluation failed")
     try:
         recommendation, program_rec = await recommend_today(
             db, user.id, now=now, day_index_override=day_index, focus_muscles=focus

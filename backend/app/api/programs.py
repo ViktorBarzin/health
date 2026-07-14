@@ -21,12 +21,16 @@ Scoped to ``get_current_user``.
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.principle import ExperienceLevel, TrainingGoal
+from app.models.program import ProgramRevision
 from app.models.user import User
 from app.schemas.program import (
     GenerateProgramRequest,
@@ -47,6 +51,7 @@ from app.services.program_query import (
     list_programs,
 )
 from app.services.program_templates import SUPPORTED_DAYS
+from app.services.review_query import adherence_weeks
 
 router = APIRouter()
 
@@ -144,6 +149,54 @@ async def get_active(
             status_code=status.HTTP_404_NOT_FOUND, detail="No active Program"
         )
     return ProgramDetail.model_validate(program)
+
+
+@router.get("/active/revisions")
+async def active_program_revisions(
+    limit: int = Query(default=20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """The active Program's Block Review receipts, newest first (ADR-0011).
+
+    Every automatic change, readable: what moved, from-to, why, and which
+    Principle bounded it. Empty when no Program is active or nothing changed.
+    """
+    program = await active_program(db, user.id)
+    if program is None:
+        return []
+    rows = (
+        (
+            await db.execute(
+                select(ProgramRevision)
+                .where(ProgramRevision.program_id == program.id)
+                .order_by(ProgramRevision.version.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "version": r.version,
+            "trigger": r.trigger.value,
+            "changes": r.changes,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/active/adherence")
+async def active_program_adherence(
+    weeks: int = Query(default=4, ge=1, le=12),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Per-week, per-muscle prescribed-vs-performed for the active Program."""
+    now = datetime.now(timezone.utc)
+    return await adherence_weeks(db, user.id, now=now, weeks=weeks)
 
 
 @router.get("/{program_id}", response_model=ProgramDetail)

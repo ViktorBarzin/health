@@ -14,13 +14,16 @@ Out of scope for this slice: offline sync (#6), rest timer / supersets / plate
 calc (#7), PR detection (#8).
 """
 
+import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
+from app.services.review_query import evaluate_active_program
 from app.database import get_db
 from app.models.exercise import Exercise
 from app.models.personal_record import PersonalRecord
@@ -45,6 +48,8 @@ from app.services.pr_service import detect_and_persist_prs, reconcile_exercise_p
 from app.services.volume import session_volume
 
 router = APIRouter()
+
+_review_logger = logging.getLogger("app.review")
 
 
 async def _get_owned_session(
@@ -252,6 +257,15 @@ async def finish_session(
         )
     await db.flush()
     await db.refresh(session, attribute_names=["sets", "ended_at"])
+    # A finished Session is the Block Review's trigger moment (ADR-0011):
+    # evaluate now (gated + damped inside) so next week's targets move while
+    # the workout is still fresh. Best-effort — finishing never breaks.
+    try:
+        await evaluate_active_program(
+            db, user.id, now=datetime.now(timezone.utc)
+        )
+    except Exception:
+        _review_logger.exception("block review evaluation failed on finish")
     return _detail(session)
 
 

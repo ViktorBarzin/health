@@ -5,6 +5,11 @@
   import { muscleLabel } from '$lib/muscle-heat';
   import { readinessColor } from '$lib/readiness';
   import type { SwapAlternative } from '$lib/swap';
+  import {
+    describeChange,
+    isRecentRevision,
+    type ProgramRevision,
+  } from '$lib/adaptation';
   import type {
     AdjustResponse,
     ProgramDay,
@@ -56,6 +61,7 @@
         `/api/recommendations/today${qs}`,
       );
       swapped = dayOverride !== null || muscleFocus !== null;
+      if (today.program) void loadLatestRevision();
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to load today's workout";
     } finally {
@@ -263,6 +269,22 @@
     }
   }
 
+  // "What changed and why" (ADR-0011): surface a fresh Block Review change.
+  let recentRevision = $state<ProgramRevision | null>(null);
+  async function loadLatestRevision() {
+    try {
+      const revs = await api.get<ProgramRevision[]>(
+        '/api/programs/active/revisions?limit=1',
+      );
+      recentRevision =
+        revs.length > 0 && isRecentRevision(revs[0].created_at, Date.now())
+          ? revs[0]
+          : null;
+    } catch {
+      recentRevision = null;
+    }
+  }
+
   let exercises = $derived(today?.exercises ?? []);
   let isEmpty = $derived(!loading && exercises.length === 0);
   let ctx = $derived(today?.program ?? null);
@@ -354,6 +376,21 @@
         {/if}
       </div>
     {/if}
+  {/if}
+
+  <!-- Block Review banner: a fresh automatic change, with its receipt link -->
+  {#if recentRevision && ctx}
+    <div class="px-4 py-2.5 rounded-xl bg-primary-500/10 border border-primary-500/30">
+      <p class="text-xs font-medium text-primary-200">
+        Your program adapted: {recentRevision.changes.map(describeChange).join('; ')}
+      </p>
+      <a
+        href="/programs/{ctx.program_id}"
+        class="mt-1 inline-block text-[11px] text-primary-300 underline underline-offset-2"
+      >
+        Why? See the receipts →
+      </a>
+    </div>
   {/if}
 
   {#if ctx?.is_deload}

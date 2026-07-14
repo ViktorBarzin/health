@@ -406,9 +406,26 @@ async def recommend_from_program(
         for slot in day.slots:
             muscle = slot["muscle"]
             candidates = await _exercises_for_muscle(db, user_id, muscle)
-            pick = _pick_exercise(
-                candidates, available=available, history=history, used=used
-            )
+            # A Block Review rotation pins a slot to a specific Exercise
+            # (ADR-0011); honour it when it's still equippable and visible,
+            # else fall back to the normal choice.
+            pick = None
+            pin = slot.get("exercise_id")
+            if pin:
+                pin_id = uuid.UUID(pin)
+                pick = next(
+                    (
+                        c
+                        for c in candidates
+                        if c[0].id == pin_id
+                        and _can_equip(c[0].equipment, available)
+                    ),
+                    None,
+                )
+            if pick is None:
+                pick = _pick_exercise(
+                    candidates, available=available, history=history, used=used
+                )
             if pick is None:
                 continue
             exercise, primary, secondary = pick

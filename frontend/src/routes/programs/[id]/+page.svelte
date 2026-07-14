@@ -14,6 +14,14 @@
     provenanceReceipts,
   } from '$lib/program';
   import type { Principle, ProgramDetail } from '$lib/types';
+  import {
+    completionTone,
+    describeChange,
+    triggerLabel,
+    type AdherenceWeek,
+    type ProgramRevision,
+  } from '$lib/adaptation';
+  import { formatDate } from '$lib/utils/format';
 
   // Program overview (#13, ADR-0004): the weeks × days structure, the ramping
   // per-muscle weekly volume (a small bar strip), the deload week flagged, and
@@ -41,10 +49,27 @@
     try {
       program = await api.get<ProgramDetail>(`/api/programs/${programId}`);
       await loadPrinciples(program);
+      if (program.status === 'active') void loadAdaptation();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load program';
     } finally {
       loading = false;
+    }
+  }
+
+  // Block Review surfaces (ADR-0011): the receipts timeline + the adherence
+  // strip — active Program only (the endpoints are active-scoped).
+  let revisions = $state<ProgramRevision[]>([]);
+  let adherence = $state<AdherenceWeek[]>([]);
+
+  async function loadAdaptation() {
+    try {
+      [revisions, adherence] = await Promise.all([
+        api.get<ProgramRevision[]>('/api/programs/active/revisions'),
+        api.get<AdherenceWeek[]>('/api/programs/active/adherence'),
+      ]);
+    } catch {
+      // Display-only extras — the page stands without them.
     }
   }
 
@@ -152,6 +177,73 @@
       >
         {acting ? 'Activating…' : 'Make this my active program'}
       </button>
+    {/if}
+
+    <!-- Adherence: prescribed vs performed (ADR-0011, active Program only) -->
+    {#if adherence.some((w) => w.sessions > 0)}
+      <section class="space-y-2">
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-surface-500">
+          Prescribed vs performed
+        </h2>
+        <div class="space-y-2">
+          {#each adherence.filter((w) => w.sessions > 0 || w.current) as wk (wk.week)}
+            <div class="p-3 rounded-xl bg-surface-800 border border-surface-700">
+              <p class="text-xs font-medium text-surface-400 mb-1.5">
+                Week {wk.week}{wk.current ? ' · in progress' : ''} — {wk.sessions} session{wk.sessions === 1 ? '' : 's'}
+              </p>
+              {#if wk.muscles.length === 0}
+                <p class="text-xs text-surface-600">No prescribed training logged.</p>
+              {:else}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each wk.muscles as m (m.muscle)}
+                    {@const tone = completionTone(m.completion)}
+                    <span
+                      class="px-2 py-1 rounded-md text-[11px] tabular-nums border
+                             {tone === 'good'
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : tone === 'ok'
+                          ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                          : 'bg-red-500/10 border-red-500/30 text-red-300'}"
+                    >
+                      {muscleLabel(m.muscle)} {m.performed_sets}/{m.prescribed_sets}
+                      {#if m.hard_failures > 0}· {m.hard_failures}✕{/if}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    <!-- Adaptations: the Block Review receipts (ADR-0011) -->
+    {#if revisions.length > 0}
+      <section class="space-y-2">
+        <h2 class="text-xs font-semibold uppercase tracking-wide text-surface-500">
+          Adaptations — what the engine changed
+        </h2>
+        <ul class="space-y-2">
+          {#each revisions as rev (rev.version)}
+            <li class="p-3 rounded-xl bg-surface-800 border border-surface-700">
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <span class="text-[0.6rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-300">
+                  {triggerLabel(rev.trigger)} · v{rev.version}
+                </span>
+                <span class="text-[11px] text-surface-500">{formatDate(rev.created_at)}</span>
+              </div>
+              <ul class="space-y-1">
+                {#each rev.changes as ch, i (i)}
+                  <li>
+                    <p class="text-sm text-surface-200">{describeChange(ch)}</p>
+                    <p class="text-xs text-surface-500">{ch.reason}</p>
+                  </li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        </ul>
+      </section>
     {/if}
 
     <!-- The split -->
