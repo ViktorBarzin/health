@@ -17,9 +17,12 @@
   import {
     completionTone,
     describeChange,
+    proposalHeadline,
     triggerLabel,
     type AdherenceWeek,
+    type AnalysisReportRead,
     type ProgramRevision,
+    type ProposalRead,
   } from '$lib/adaptation';
   import { formatDate } from '$lib/utils/format';
 
@@ -70,6 +73,61 @@
       ]);
     } catch {
       // Display-only extras — the page stands without them.
+    }
+    try {
+      const [reportRes, pending] = await Promise.all([
+        api.get<{ report: AnalysisReportRead | null }>('/api/analysis/report'),
+        api.get<ProposalRead[]>('/api/analysis/proposals'),
+      ]);
+      report = reportRes.report;
+      proposals = pending;
+    } catch {
+      // Coach layer is optional — prose pauses, numbers stand (ADR-0011).
+    }
+  }
+
+  // Coach's notes + Proposals (ADR-0011 M5): qwen narrates and suggests; the
+  // engine validates and YOU decide. Approvals land as receipted revisions.
+  let report = $state<AnalysisReportRead | null>(null);
+  let proposals = $state<ProposalRead[]>([]);
+  let analyzing = $state(false);
+  let coachError = $state('');
+  let resolving = $state<string | null>(null);
+
+  async function analyzeNow() {
+    if (analyzing) return;
+    analyzing = true;
+    coachError = '';
+    try {
+      const res = await api.post<{ report: AnalysisReportRead }>('/api/analysis/run');
+      report = res.report;
+      proposals = await api.get<ProposalRead[]>('/api/analysis/proposals');
+    } catch (err) {
+      coachError =
+        err instanceof Error
+          ? err.message
+          : 'Analysis is unavailable right now — your numbers still adapt automatically.';
+    } finally {
+      analyzing = false;
+    }
+  }
+
+  async function resolveProposal(id: string, approve: boolean) {
+    if (resolving) return;
+    resolving = id;
+    coachError = '';
+    try {
+      await api.post(`/api/analysis/proposals/${id}/${approve ? 'approve' : 'reject'}`);
+      proposals = proposals.filter((p) => p.id !== id);
+      if (approve) {
+        // An approval just changed the Program — refresh the receipts + ramp.
+        revisions = await api.get<ProgramRevision[]>('/api/programs/active/revisions');
+        if (id && program) program = await api.get<ProgramDetail>(`/api/programs/${program.id}`);
+      }
+    } catch (err) {
+      coachError = err instanceof Error ? err.message : 'Failed to resolve the proposal';
+    } finally {
+      resolving = null;
     }
   }
 
@@ -214,6 +272,65 @@
             </div>
           {/each}
         </div>
+      </section>
+    {/if}
+
+    <!-- Coach's notes + Proposals (ADR-0011 M5) -->
+    {#if program.status === 'active'}
+      <section class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-semibold uppercase tracking-wide text-surface-500">
+            Coach's notes
+          </h2>
+          <button
+            onclick={analyzeNow}
+            disabled={analyzing}
+            class="text-[11px] font-medium text-primary-400 hover:text-primary-300 disabled:opacity-50"
+          >
+            {analyzing ? 'Analyzing…' : 'Analyze now'}
+          </button>
+        </div>
+        {#if coachError}
+          <p class="text-xs text-red-400">{coachError}</p>
+        {/if}
+        {#if report}
+          <div class="p-3 rounded-xl bg-surface-800 border border-surface-700">
+            <p class="text-[11px] text-surface-500 mb-1">
+              Week {report.week} · {formatDate(report.created_at)}
+            </p>
+            <p class="text-sm text-surface-200 leading-relaxed">{report.narrative}</p>
+          </div>
+        {:else if !coachError}
+          <p class="text-xs text-surface-500">
+            Notes appear after your first complete training week (or tap Analyze now).
+          </p>
+        {/if}
+        {#if proposals.length > 0}
+          <ul class="space-y-2">
+            {#each proposals as prop (prop.id)}
+              <li class="p-3 rounded-xl bg-surface-800 border border-primary-500/30">
+                <p class="text-sm font-medium text-surface-100">{proposalHeadline(prop.change)}</p>
+                <p class="mt-0.5 text-xs text-surface-400">{prop.change.reason}</p>
+                <div class="mt-2 flex gap-2">
+                  <button
+                    onclick={() => resolveProposal(prop.id, true)}
+                    disabled={resolving !== null}
+                    class="px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-xs font-semibold disabled:opacity-50"
+                  >
+                    {resolving === prop.id ? '…' : 'Approve'}
+                  </button>
+                  <button
+                    onclick={() => resolveProposal(prop.id, false)}
+                    disabled={resolving !== null}
+                    class="px-3 py-1.5 rounded-lg bg-surface-700 hover:bg-surface-600 text-surface-200 text-xs font-medium disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </section>
     {/if}
 

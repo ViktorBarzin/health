@@ -20,6 +20,7 @@
   import RecentWorkouts from '$lib/components/dashboard/RecentWorkouts.svelte';
   import SleepSummary from '$lib/components/dashboard/SleepSummary.svelte';
   import ReadinessCard from '$lib/components/dashboard/ReadinessCard.svelte';
+  import BodyCompVsVolume from '$lib/components/progress/BodyCompVsVolume.svelte';
 
   const reviewItems = MORE_GROUPS.find((g) => g.title === 'Progress')?.items ?? [];
 
@@ -219,6 +220,9 @@
       <MetricCard title="Exercise" value={effectiveSummary.exercise_minutes_today != null ? Math.round(effectiveSummary.exercise_minutes_today) : null} unit="min" trend={exerciseData?.stats.trend_pct ?? null} sparklineData={exerciseSparkline} icon="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" color="#ff7849" />
     {/if}
   </div>
+
+  <!-- Body comp vs training volume (plan M6): the correlation overlay -->
+  <BodyCompVsVolume />
 
   <div class="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
     <RecentWorkouts start={dateRange.startISO} end={dateRange.endISO} />

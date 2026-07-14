@@ -31,6 +31,7 @@ from app.models.program import (
 from app.models.food import Food
 from app.models.diary_entry import DiaryEntry, Meal
 from app.models.recipe import Recipe, RecipeIngredient
+from app.models.analysis import AnalysisReport, Proposal, ProposalStatus
 from app.models.prescription import Prescription, PrescriptionSource
 from app.models.push import PushSubscription, PushTimer
 from app.models.connection import (
@@ -75,6 +76,9 @@ __all__ = [
     "Recipe",
     "RecipeIngredient",
     "Connection",
+    "AnalysisReport",
+    "Proposal",
+    "ProposalStatus",
     "Prescription",
     "PrescriptionSource",
     "ProgramRevision",

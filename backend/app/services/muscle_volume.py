@@ -112,3 +112,40 @@ def _enum_value(v: Muscle | MuscleRole | str) -> str:
     """Return the wire string for a muscle/role, whether the driver hands back the
     Python enum member or its raw string label."""
     return v.value if isinstance(v, (Muscle, MuscleRole)) else str(v)
+
+
+async def weekly_set_series(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    now: dt.datetime,
+    weeks: int = 12,
+) -> list[dict]:
+    """Counted (normal) Sets per ISO week over the trailing window — the
+    training-volume series the body-comp overlay chart plots (plan M6).
+
+    One row per week that HAD training, ``{"week_start": ISO date, "sets": n}``,
+    oldest first. Weeks with no Sets are simply absent (the chart shows gaps
+    honestly rather than fabricating zeros for pre-history).
+    """
+    window_start = now - dt.timedelta(weeks=weeks)
+    week_bucket = func.date_trunc("week", TrainingSession.started_at)
+    stmt = (
+        select(
+            week_bucket.label("wk"),
+            func.count(TrainingSet.id).label("sets"),
+        )
+        .select_from(TrainingSet)
+        .join(TrainingSession, TrainingSet.session_id == TrainingSession.id)
+        .where(
+            TrainingSession.user_id == user_id,
+            TrainingSet.set_type == SetType.normal,
+            TrainingSession.started_at >= window_start,
+        )
+        .group_by(week_bucket)
+        .order_by(week_bucket)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {"week_start": r.wk.date().isoformat(), "sets": int(r.sets)} for r in rows
+    ]

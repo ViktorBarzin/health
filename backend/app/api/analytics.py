@@ -38,7 +38,7 @@ from app.services.analytics import (
     recovery_for_user,
     trained_exercises_for_user,
 )
-from app.services.muscle_volume import weekly_muscle_volume
+from app.services.muscle_volume import weekly_muscle_volume, weekly_set_series
 from app.services.recovery import DEFAULT_HALF_LIFE_HOURS
 
 router = APIRouter()
@@ -102,6 +102,17 @@ async def get_volume(
             for r in rows
         ],
     )
+
+
+@router.get("/volume-series")
+async def volume_series(
+    weeks: int = Query(default=12, ge=1, le=52),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Counted Sets per week over the trailing window (plan M6 overlay chart)."""
+    now = datetime.now(timezone.utc)
+    return await weekly_set_series(db, user.id, now=now, weeks=weeks)
 
 
 @router.get("/e1rm-trend", response_model=E1rmTrendResponse)

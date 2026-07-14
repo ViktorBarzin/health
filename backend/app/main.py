@@ -17,6 +17,7 @@ from app.core.observability import (
     register_slow_query_logging,
 )
 from app.database import async_session, engine
+from app.services.analysis import get_analysis_provider, run_weekly_analysis
 from app.services.push import push_config
 from app.services.push_query import deliver_due
 
@@ -53,16 +54,72 @@ async def _push_poller() -> None:
             _push_logger.exception("push delivery tick failed")
 
 
+_analysis_logger = logging.getLogger("app.analysis")
+
+# The weekly coach's-notes cadence: a coarse tick is plenty — run_weekly_analysis
+# self-gates (one report per Program training week), so most ticks are no-ops.
+_ANALYSIS_POLL_SECONDS = 1800.0
+
+
+async def _analysis_poller() -> None:
+    """Produce missing weekly coach's notes for every active Program."""
+    if not settings.ANALYSIS_ENABLED:
+        return
+    from sqlalchemy import select
+
+    from app.models.program import Program, ProgramStatus
+
+    provider = get_analysis_provider()
+    while True:
+        await asyncio.sleep(_ANALYSIS_POLL_SECONDS)
+        try:
+            async with async_session() as db:
+                user_ids = (
+                    (
+                        await db.execute(
+                            select(Program.user_id).where(
+                                Program.status == ProgramStatus.active
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            for user_id in user_ids:
+                try:
+                    async with async_session() as db:
+                        async with db.begin():
+                            await run_weekly_analysis(
+                                db,
+                                user_id,
+                                now=datetime.now(timezone.utc),
+                                provider=provider,
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _analysis_logger.exception(
+                        "weekly analysis failed for user %s", user_id
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _analysis_logger.exception("analysis poll tick failed")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     poller = asyncio.create_task(_push_poller())
+    analysis = asyncio.create_task(_analysis_poller())
     try:
         yield
     finally:
-        poller.cancel()
-        with suppress(asyncio.CancelledError):
-            await poller
+        for task in (poller, analysis):
+            task.cancel()
+        for task in (poller, analysis):
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(title="Apple Health Data", lifespan=lifespan)

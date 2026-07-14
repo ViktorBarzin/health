@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     # unprotected — fail closed, never plaintext.
     CONNECTION_ENCRYPTION_KEY: str | None = None
 
+    # LLM analysis layer (ADR-0011, M5): the weekly coach's-notes narrator +
+    # proposal source. Points at the in-cluster llama-swap OpenAI-compatible
+    # endpoint; the model is selected per-request by name. The provider only
+    # PROPOSES — the engine validates and the user approves (ADR-0002). Fail
+    # soft everywhere: unreachable/garbage output pauses prose, never numbers.
+    # ANALYSIS_ENABLED=false disables the weekly poller (on-demand still works).
+    ANALYSIS_ENABLED: bool = True
+    ANALYSIS_LLM_URL: str = "http://llama-swap.llama-cpp.svc.cluster.local:8080"
+    ANALYSIS_LLM_MODEL: str = "qwen3-8b"
+
     # Web Push (ADR-0010): the VAPID identity the rest-timer notifications are
     # signed with — the only mechanism that reaches a locked iPhone (and, via OS
     # mirroring, a paired Apple Watch) from the PWA. Generate once with the

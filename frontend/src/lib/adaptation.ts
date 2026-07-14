@@ -85,3 +85,32 @@ export function completionTone(completion: number): 'good' | 'ok' | 'weak' {
   if (completion >= 0.8) return 'ok';
   return 'weak';
 }
+
+// --- M5: coach's notes + Proposals ---
+
+export interface AnalysisReportRead {
+  id: string;
+  week: number;
+  narrative: string;
+  created_at: string;
+}
+
+export interface ProposalRead {
+  id: string;
+  change: RevisionChange & { requested?: number };
+  status: string;
+  created_at: string;
+}
+
+/** One-line headline for a pending Proposal card. */
+export function proposalHeadline(change: {
+  lever: string;
+  muscle?: string | null;
+  to?: unknown;
+}): string {
+  if (change.lever === 'volume' && change.muscle) {
+    const m = change.muscle.charAt(0).toUpperCase() + change.muscle.slice(1);
+    return `${m} → ${change.to} sets/week`;
+  }
+  return 'Program change';
+}
