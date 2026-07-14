@@ -131,6 +131,7 @@ backend/app/
 | `connections` | id (UUID) | UNIQUE(user_id, provider) |
 | `user_exercise_prefs` | id | UNIQUE(user_id, exercise_id) — per-user rest default + `excluded` (Exclusion) |
 | `push_subscriptions` | id (UUID) | UNIQUE(endpoint), (user_id) |
+| `ingest_tokens` | id (UUID) | UNIQUE(token_hash), (user_id) — hashed push-ingest credentials (ADR-0012) |
 | `push_timers` | user_id (one pending per user) | (fire_at) |
 | `recipe_ingredients` | id (UUID) | (recipe_id), (food_id) |
 | `prescriptions` | id (UUID) | UNIQUE(session_id), (user_id) — immutable started-slots snapshot (ADR-0011) |
@@ -592,6 +593,22 @@ Review"/"Proposal"). The third nested loop (above per-set Progression, per-day a
   (`/api/analytics/volume-series` + pure `lib/bodycomp.ts`). Research pipeline is PROCESS not
   code: docs/runbooks/research-pipeline.md (gap-driven, citations verified, human-reviewed).
 
+**Apple Health auto-sync — the push Connector** (M7, ADR-0012; plan
+docs/plans/2026-07-14-apple-health-auto-sync.md). iOS Shortcut automations (Apple Watch
+workout-END + morning time trigger, both no-confirmation) read the ENGINE-CRITICAL HealthKit
+set (HRV, RHR, sleep, body mass/fat/lean, active energy, workouts) and POST to
+`POST /api/ingest/apple` on the PUBLIC auth-free host **health-api.viktorbarzin.me**
+(ingress: /api/ingest path allowlist + strip-auth-headers + Sablier blocking — ADR-0012).
+Auth = per-user bearer tokens (`ingest_tokens`, SHA-256 at rest, plaintext shown once,
+revocable; minted in Settings → Apple Health auto-sync which also carries the full Shortcut
+recipe + last-sync liveness). Body = Shortcut-friendly CSV lines (`metric,…`/`sleep,…`/
+`workout,…`) or JSON; `services/ingest.py` (pure) normalises type spellings (display + HK
+identifiers), lb→kg, sleep stages onto HK `Asleep*` (the Readiness filter), kcal→kJ; junk
+lines are skipped+counted. `services/ingest_query.py` lands via the SAME idempotent dedup +
+targeted rollup recompute as Connectors, Source "Apple Shortcut" + ImportBatch per POST.
+High-frequency series (per-minute HR, steps) deliberately stay on occasional export.zip.
+Known gap: Workout↔Session auto-linking still unimplemented.
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -779,10 +796,10 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `d0e1f2a3b4c9`
-(analysis reports + proposals; chains … → a7b8c9d0e1f2 (excluded flag) →
-b8c9d0e1f2a3 (web push) → c9d0e1f2a3b4 (prescriptions + program revisions +
-program version/reviewed_at/parent, ADR-0011) → d0e1f2a3b4c9). Revision ids
+Alembic migrations in `backend/alembic/versions/`. Current head: `e1f2a3b4c9d0`
+(ingest tokens, ADR-0012; chains … → a7b8c9d0e1f2 (excluded flag) →
+b8c9d0e1f2a3 (web push) → c9d0e1f2a3b4 (prescriptions + program revisions,
+ADR-0011) → d0e1f2a3b4c9 (analysis reports + proposals) → e1f2a3b4c9d0). Revision ids
 follow a rolling-hex pattern — check `ls alembic/versions` before minting one.
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)

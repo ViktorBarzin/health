@@ -17,6 +17,7 @@ from app.api.nutrition import router as nutrition_router
 from app.api.principles import router as principles_router
 from app.api.programs import router as programs_router
 from app.api.analysis import router as analysis_llm_router
+from app.api.ingest_push import router as ingest_push_router
 from app.api.push import router as push_router
 from app.api.readiness import router as readiness_router
 from app.api.recommendations import router as recommendations_router
@@ -57,3 +58,4 @@ router.include_router(
 )
 router.include_router(push_router, prefix="/api/push", tags=["push"])
 router.include_router(analysis_llm_router, prefix="/api/analysis", tags=["analysis"])
+router.include_router(ingest_push_router, prefix="/api/ingest", tags=["ingest"])

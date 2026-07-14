@@ -6,6 +6,7 @@
   import XmlUpload from '$lib/components/import/XmlUpload.svelte';
   import ImportStatusComponent from '$lib/components/import/ImportStatus.svelte';
   import FitbodImport from '$lib/components/import/FitbodImport.svelte';
+  import AppleHealthSync from '$lib/components/settings/AppleHealthSync.svelte';
   import Exclusions from '$lib/components/settings/Exclusions.svelte';
   import GymProfileSettings from '$lib/components/settings/GymProfileSettings.svelte';
   import TimerNotifications from '$lib/components/settings/TimerNotifications.svelte';
@@ -45,6 +46,15 @@
       <p class="text-sm text-surface-500 mt-1">Your bars, plates, and equipment — powers the plate calculator and workout recommendations.</p>
     </div>
     <GymProfileSettings />
+  </section>
+
+  <!-- Apple Health auto-sync (push Connector, M7/ADR-0012) -->
+  <section>
+    <div class="mb-4">
+      <h2 class="text-lg font-semibold text-surface-100">Apple Health auto-sync</h2>
+      <p class="text-sm text-surface-500 mt-1">After a one-time iPhone Shortcut setup, HRV, resting heart rate, sleep, weight and workouts import themselves — after every workout and every morning.</p>
+    </div>
+    <AppleHealthSync />
   </section>
 
   <!-- Rest-timer notifications (Web Push, ADR-0010) -->
