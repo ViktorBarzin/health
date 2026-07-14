@@ -1,6 +1,19 @@
 # Adaptive programming: the recursive learning loop (grilled with Viktor, 2026-07-14)
 
-Status: **approved — M4 executing**
+Status: **executing — M4 shipped to prod 2026-07-14; M5/M6 next**
+
+## Execution progress (2026-07-14)
+
+| Item | State | Evidence |
+|------|-------|----------|
+| M4a Prescription + Adherence | **Live** | prescriptions table written by every start path; pure adherence core (14 tests) |
+| M4b Block Review + succession | **Live** | pure damped engine (11 tests incl. oscillation/determinism); versioned receipts; block succession from achieved volume; evaluate-on-read on Today + finish (4 integration tests) |
+| M4c Surfaces | **Live** | /api/programs/active/{revisions,adherence}; adherence strip + adaptations timeline on the program page; "your program adapted" banner on Today |
+| M5 qwen layer | Pending | best built against a week of real adherence data |
+| M6 insights + research | Pending | body-comp charts need the Apple Health catch-up import |
+
+Backend suite 866 green; frontend 275; Alembic head c9d0e1f2a3b4. The loop ships
+inert and wakes as real training accumulates (two complete weeks of signal required).
 
 Goal: the Program stops being a static artifact. It continuously learns from what Viktor
 actually does in the gym (missed sets/reps, Effort) and from his health data, staying an
