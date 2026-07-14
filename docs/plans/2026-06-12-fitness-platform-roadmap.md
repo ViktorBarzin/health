@@ -79,6 +79,9 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
    no payment); Health Auto Export app supported as an optional paid client of the same
    endpoint; export.zip upload stays as backfill. Best-effort/idempotent (HealthKit locked
    off when phone locked). Carries HRV/RHR/sleep for Readiness.
+   **(SHIPPED 2026-07-14 as M7 — docs/plans/2026-07-14-apple-health-auto-sync.md,
+   ADR-0012: workout-end + morning automations → bearer ingest on
+   health-api.viktorbarzin.me; E2E-verified. Awaiting Viktor's one-time Shortcut setup.)**
 3. **Whoop Connector**: scheduled puller on the official OAuth2 v2 API + webhooks — Anca's
    recovery path (HRV, RHR, sleep stages, recovery score). Build on v2 (v1 webhooks gone).
 4. **Full data Export** (ADR-0006): one-tap per-user JSON+CSV archive of all Sessions,
