@@ -1,6 +1,6 @@
 # Adaptive programming: the recursive learning loop (grilled with Viktor, 2026-07-14)
 
-Status: **executing — M4 shipped to prod 2026-07-14; M5/M6 next**
+Status: **done — M4+M5+M6 live in prod 2026-07-14; loop wakes as real training accumulates**
 
 ## Execution progress (2026-07-14)
 
@@ -9,8 +9,23 @@ Status: **executing — M4 shipped to prod 2026-07-14; M5/M6 next**
 | M4a Prescription + Adherence | **Live** | prescriptions table written by every start path; pure adherence core (14 tests) |
 | M4b Block Review + succession | **Live** | pure damped engine (11 tests incl. oscillation/determinism); versioned receipts; block succession from achieved volume; evaluate-on-read on Today + finish (4 integration tests) |
 | M4c Surfaces | **Live** | /api/programs/active/{revisions,adherence}; adherence strip + adaptations timeline on the program page; "your program adapted" banner on Today |
-| M5 qwen layer | Pending | best built against a week of real adherence data |
-| M6 insights + research | Pending | body-comp charts need the Apple Health catch-up import |
+| M5 qwen layer | **Live** | AnalysisProvider → llama-swap qwen3-8b (mocked in 9 tests); weekly self-gating poller; coach's notes + Approve/Reject proposals on the program page; approval clamps into the Principle band and lands as a receipted revision |
+| M6 insights + research | **Live** | body-comp vs training-volume overlay on Progress (honest no-reading gaps + stale-data note); research runbook (gap-driven, human-curated) |
+
+**Android-emulator usability pass (same day):** walked Today/Programs/preset→program→
+today's-workout→SwapSheet→live Session/Progress in Chrome on the shared in-cluster
+emulator. Found and fixed two production bugs the pass existed to catch:
+(1) `/progress` infinite refetch loop (a `$state` version counter read+written inside its
+own `$effect` — every card blank, API hammered at ~10 req/s); (2) **the entire design
+system CSS never compiled** — the app.css header comment contained `surface-*/primary-*`,
+whose embedded `*/` terminated the comment early and the parser swallowed the whole
+`@theme` block: no custom colour/font utilities existed at all (invisible primary buttons,
+unreadable light mode; dark mode only *looked* right because transparent-on-black passes
+for dark). Fixed + Tailwind 4.0→4.3.2 + `@theme inline`; verified live on the emulator in
+both themes: volt-lime buttons, SwapSheet ranked equivalents with NEW-TO-YOU badges,
+WYSIWYG swapped start, live logging instrument all render as designed. Test program +
+session created on the test identity were deleted after. Caveat: Android Chrome only —
+iOS Safari behaviours still need Viktor's iPhone.
 
 Backend suite 866 green; frontend 275; Alembic head c9d0e1f2a3b4. The loop ships
 inert and wakes as real training accumulates (two complete weeks of signal required).
