@@ -97,6 +97,21 @@ Exit criterion: Viktor starts a Goal-driven Program, trains from it, and deletes
 3. Dynamic Budget: calorie/macro targets from Goal (cut/maintain/bulk) + measured energy
    expenditure from watch data. No MFP history import (not an active user).
 
+## M4–M6 — Adaptive programming (added 2026-07-14)
+
+The recursive learning loop: Prescription persistence → Adherence → a continuous, damped,
+deterministic **Block Review** that keeps the active Program true to observed performance
+(all levers; structural changes only at block boundaries onto established templates), with
+qwen narrating/proposing and gap-driven Claude research growing the KB under human review.
+Full plan: docs/plans/2026-07-14-adaptive-programming.md; decision: ADR-0011.
+
+- **M4 — Adaptive core**: prescriptions table, pure Adherence metrics, Program versioning +
+  receipts, the damped Block Review engine, adherence strip + change-log surfaces.
+- **M5 — LLM layer**: qwen weekly coach's notes + validated Proposal/approval queue
+  (AnalysisProvider over llama-swap; ADR-0002 posture).
+- **M6 — Insights + research**: adherence + body-comp-vs-volume views; gap-driven cited
+  Principle/preset research merged only after review.
+
 ## Deliberate non-goals
 
 - User-authored workout plans/templates (ADR-0002/ADR-0004 — Programs and visits are

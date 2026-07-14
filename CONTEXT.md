@@ -94,6 +94,34 @@ _Avoid_: blacklist, ban
 A daily per-user signal derived from HRV, resting heart rate, and sleep trends; an input the
 engine may weigh, and a dashboard insight in its own right.
 
+**Prescription**:
+The immutable snapshot of what a started Recommendation told the user to do — the slots with
+their target sets × reps × weight at the moment the Session was instantiated. Editing or
+logging never rewrites it; it exists so performed work can be compared against planned work.
+_Avoid_: plan (avoided already), template
+
+**Adherence**:
+The measured gap between a Prescription and what was actually performed — completed-set ratio,
+rep shortfalls (weighted by Effort: failing at 0 reps-in-reserve means more than stopping with
+reserve), and missed Sessions; aggregated per muscle and per training week. The primary signal
+the Block Review learns from.
+_Avoid_: compliance (people-management flavour), performance (overloaded)
+
+**Block Review**:
+The continuous, deterministic engine loop that keeps the active Program true to observed
+Adherence, Recovery, and Readiness: damped tuning of volume, rep placement, and exercise
+selection applied to future days (per-lever cooldowns, materiality thresholds), and — only at
+block boundaries — structural changes (split, days/week) that always land on an established
+template. Every change is versioned with a receipt. The third nested loop, above per-set
+Progression and per-day autoregulation.
+_Avoid_: recursive learning (marketing), AI adjustment (the engine is deterministic)
+
+**Proposal**:
+A structured Program change suggested by the analysis LLM (or a future source) that is NOT
+applied until the engine validates it against Principle bounds and the user approves it.
+Distinct from Block Review changes, which apply automatically within bounds.
+_Avoid_: recommendation (taken)
+
 ### Nutrition
 
 **Food**:
@@ -175,6 +203,10 @@ downloadable JSON + CSV. The data-ownership guarantee of a self-hosted platform.
 - **Progression** consumes rep performance and logged **Effort** (effort-gated double
   progression); when Effort is missing it falls back to rep performance alone — rating is
   never required
+- Starting any Recommendation writes a **Prescription**; performed Sets measured against it
+  yield **Adherence**; the **Block Review** consumes Adherence (+ Recovery, Readiness) and
+  updates the active **Program** — deterministic and bounded, with the analysis LLM limited
+  to narrating and filing **Proposals** the user approves (ADR-0002, ADR-0011)
 - Programs and Recommendations are always generated — user-authored plans remain a
   non-goal (ADR-0002, ADR-0004)
 - The **Exercise** library is shared across users; Sessions, Sets, Workouts, and Metric
