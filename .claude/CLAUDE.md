@@ -133,6 +133,10 @@ backend/app/
 | `push_subscriptions` | id (UUID) | UNIQUE(endpoint), (user_id) |
 | `push_timers` | user_id (one pending per user) | (fire_at) |
 | `recipe_ingredients` | id (UUID) | (recipe_id), (food_id) |
+| `prescriptions` | id (UUID) | UNIQUE(session_id), (user_id) — immutable started-slots snapshot (ADR-0011) |
+| `program_revisions` | id (UUID) | (program_id, version) — Block Review receipts |
+| `analysis_reports` | id (UUID) | UNIQUE(program_id, week) — qwen coach's notes + digest |
+| `proposals` | id (UUID) | (user_id, status) — LLM suggestions awaiting approval |
 
 **Exercise library** (the shared movement catalog — CONTEXT.md "Exercise"): `exercises.user_id`
 NULL = global/shared (seeded from free-exercise-db), non-NULL = that user's private custom
@@ -564,6 +568,30 @@ single-app OAuth). The framework + one reference provider (Oura), structured so 
   freestyle muscle-group focus (validated against the typed dimension). Today gets a "Train a
   different day?" picker (Program day pills / Push-Pull-Legs-Core groups).
 
+**Adaptive programming — the Block Review loop** (ADR-0011; plan
+docs/plans/2026-07-14-adaptive-programming.md; CONTEXT.md "Prescription"/"Adherence"/"Block
+Review"/"Proposal"). The third nested loop (above per-set Progression, per-day autoregulation):
+- Every start path snapshots a **Prescription** (`instantiate_session` writes `prescriptions`);
+  pure `services/adherence.py` measures performed-vs-planned (hard failure = rep shortfall at
+  RIR 0 vs soft with reserve; normal sets only; no Prescription ⇒ None never fake 100%).
+- Pure `services/block_review.py` = the damped rules (2 complete weeks required; volume ±1–2
+  within the Principle band; rotation after 3 consecutive failed sessions via the Swap ranking
+  pinned into `day.slots[i]["exercise_id"]` — honored by `program_recommendation`; per-lever
+  weekly cooldowns; no flip-flop). `services/review_query.py` applies as versioned
+  `program_revisions` receipts (future weeks only), **evaluate-on-read** (Today preview +
+  Session finish; 6h `reviewed_at` gate + new-finished-Session check), and at block end
+  auto-generates the successor Program (`parent_program_id` chain; achieved volume = new week-1
+  start; days/week steps down when block day-completion <70%) — a Program never dead-ends.
+- **M5 qwen layer** (`services/analysis.py`, `/api/analysis`): deterministic weekly digest →
+  llama-swap qwen3-8b → stored coach's-notes narrative (`analysis_reports`, one per Program
+  week) + volume `proposals`; approval re-validates against the CURRENT Program, clamps into
+  the band, lands as a `trigger=proposal` revision; a 30-min self-gating poller (`main.py`)
+  runs the weekly cadence. LLM down ⇒ numbers still adapt (ADR-0002 posture).
+- Surfaces: program page (adherence strip, adaptations timeline, coach's notes + Approve/
+  Reject, Analyze now), Today banner for <48h revisions, Progress body-comp-vs-volume overlay
+  (`/api/analytics/volume-series` + pure `lib/bodycomp.ts`). Research pipeline is PROCESS not
+  code: docs/runbooks/research-pipeline.md (gap-driven, citations verified, human-reviewed).
+
 ## Ingestion Pipeline
 
 The XML parser uses a **producer-consumer** pattern:
@@ -751,9 +779,11 @@ Authentik forward-auth identity (ADR-0003). No in-app login; no sessions.
 
 ## Migrations
 
-Alembic migrations in `backend/alembic/versions/`. Current head: `b8c9d0e1f2a3`
-(`add web push tables`, ADR-0010; chains f6a7b8c9d0e1 → a7b8c9d0e1f2 (`excluded`
-flag on user_exercise_prefs) → b8c9d0e1f2a3).
+Alembic migrations in `backend/alembic/versions/`. Current head: `d0e1f2a3b4c9`
+(analysis reports + proposals; chains … → a7b8c9d0e1f2 (excluded flag) →
+b8c9d0e1f2a3 (web push) → c9d0e1f2a3b4 (prescriptions + program revisions +
+program version/reviewed_at/parent, ADR-0011) → d0e1f2a3b4c9). Revision ids
+follow a rolling-hex pattern — check `ls alembic/versions` before minting one.
 
 Run: `alembic upgrade head` (runs automatically in `entrypoint.sh`)
 
@@ -790,6 +820,10 @@ CONNECTION_ENCRYPTION_KEY=...  # Fernet key (URL-safe base64 32-byte) encrypting
                        #   value on the app AND the sync CronJob. Comma-separated
                        #   list = key rotation (new,old). UNSET ⇒ Connections
                        #   disabled (API 503) — fail closed, never store plaintext.
+ANALYSIS_ENABLED=...   # LLM analysis (ADR-0011 M5): weekly qwen coach's-notes
+ANALYSIS_LLM_URL=...   #   poller + /api/analysis. Defaults: enabled, in-cluster
+ANALYSIS_LLM_MODEL=... #   llama-swap /v1, model qwen3-8b. Fail-soft: LLM down =>
+                       #   prose pauses, the numeric Block Review keeps adapting.
 PUSH_VAPID_PRIVATE_KEY=...  # Web Push (ADR-0010): VAPID identity signing the
 PUSH_VAPID_PUBLIC_KEY=...   #   rest-timer notifications (the locked-iPhone /
 PUSH_VAPID_SUBJECT=...      #   mirrored-Apple-Watch cue). Prod: Vault
