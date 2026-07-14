@@ -12,7 +12,7 @@
    Two token families coexist on purpose:
    • New semantic tokens (--base/--panel/--ink/--accent…) exposed as Tailwind
      utilities (bg-base, text-ink, bg-accent…) — what new screens use.
-   • The legacy surface-*/primary-* scale is REMAPPED onto theme-reactive
+   • The legacy surface-* and primary-* scale is REMAPPED onto theme-reactive
      variables so the ~35 not-yet-redesigned components instantly adopt the new
      palette + light/dark without per-file edits (they get re-skinned bespoke in
      their own slices).
@@ -24,6 +24,21 @@
   --font-sans: 'Geist Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 
+  /* Radii + motion. */
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* @theme INLINE is load-bearing: every value here is a var() reference to the
+   theme-reactive tokens defined in the :root blocks below. Plain @theme drops
+   var()-valued colour keys on the floor in Tailwind v4 — the compiled CSS then
+   contains NO bg-* or text-* colour utilities at all, and the app only *looked*
+   styled in dark mode because transparent-on-black passes for dark (found via
+   the Android-emulator usability pass: invisible primary buttons, unreadable
+   light mode). `inline` compiles each utility straight to the underlying var
+   (e.g. background-color: var(--accent)), which stays theme-reactive. */
+@theme inline {
   /* New semantic colour tokens → Tailwind utilities (bg-base, text-ink, …). */
   --color-base: var(--base);
   --color-panel: var(--panel);
@@ -65,11 +80,6 @@
   --color-accent-400: var(--accent-ink);
   --color-accent-500: var(--accent);
   --color-accent-600: var(--accent-strong);
-
-  /* Radii + motion. */
-  --radius-xl: 1rem;
-  --radius-2xl: 1.25rem;
-  --ease-snap: cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 /* ── Dark theme (default) ──────────────────────────────────────────────── */
