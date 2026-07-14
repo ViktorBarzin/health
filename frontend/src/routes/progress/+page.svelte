@@ -39,7 +39,12 @@
   let exerciseLoading = $state(true);
 
   let error = $state<string | null>(null);
-  let loadVersion = $state(0);
+  // Plain counter, deliberately NOT $state: loadDashboard runs synchronously
+  // inside the reload $effect, and `++loadVersion` on reactive state would make
+  // the effect read AND write its own dependency — an infinite refetch loop
+  // (the page hammered /api/* every ~100ms and every card stayed blank; found
+  // in the Android-emulator usability pass). The closures only compare it.
+  let loadVersion = 0;
   let windowReady = $state(false);
   let initStarted = false;
 
