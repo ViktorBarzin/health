@@ -30,7 +30,11 @@ python -m app.services.seed_foods || echo "WARN: generic foods seed failed; cont
 python -m app.services.rollup || echo "WARN: metric rollup backfill failed; continuing"
 
 # Start backend in background
-uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+# 0.0.0.0 (not loopback): the public ingest host (ADR-0012) routes /api/ingest
+# STRAIGHT to this port via the Service — the SvelteKit hop would eat the
+# Shortcut's text/plain POST with its global CSRF guard. In-pod, the node
+# proxy still reaches it via 127.0.0.1.
+uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
 # Start frontend as PID 1
 cd /app/frontend
